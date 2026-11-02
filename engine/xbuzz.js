@@ -231,7 +231,7 @@ async function tickBuzz(symbols = []) {
     if (!pick) pick = items[0];
     await pollOneCashtag(pick.symbol, pick.mint);
     // Also filtered KOL search once / 10m when bearer works
-    if (now - (store._kolAt || 0) > 600000) {
+    if (store.authFails < 1 && now - (store._kolAt || 0) > 600000) {
       store._kolAt = now;
       await pollKolFiltered().catch(() => {});
     }
@@ -249,7 +249,7 @@ async function tickBuzz(symbols = []) {
 async function pollKolFiltered() {
   if (!X_BEARER || !KOL_HANDLES.length) return null;
   const from = KOL_HANDLES.slice(0, 6).map((h) => `from:${h}`).join(' OR ');
-  const q = `(${from}) (coin OR solana OR \$OR pump OR meme) -is:retweet`;
+  const q = `(${from}) (coin OR solana OR pump OR meme) -is:retweet`;
   const url = `https://api.twitter.com/2/tweets/search/recent?max_results=10&query=${encodeURIComponent(q)}&tweet.fields=created_at,author_id,text`;
   try {
     const d = await fetchJson(url, {

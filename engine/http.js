@@ -39,7 +39,8 @@ async function fetchJson(url, opts = {}) {
       body,
     });
     if (res.status === 429 || res.status >= 500) {
-      backoffUntil.set(key, Date.now() + 20000);
+      const cool = String(key).startsWith('ds-tok') || String(key).startsWith('ds-') ? 60000 : 25000;
+      backoffUntil.set(key, Date.now() + cool);
       throw new Error(`HTTP ${res.status}`);
     }
     if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);

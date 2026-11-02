@@ -61,7 +61,7 @@ async function fetchRedditRising() {
   const outs = [];
   for (const sub of ['memes', 'all']) {
     try {
-      const d = await fetchJson(`https://www.reddit.com/r/${sub}/rising.json?limit=15`, {
+      const d = await fetchJson(`https://old.reddit.com/r/${sub}/rising.json?limit=15`, {
         ttlMs: 120000,
         key: `reddit-rising-${sub}`,
         timeoutMs: 10000,
@@ -207,6 +207,33 @@ function ingestXTrendKeywords(texts = []) {
   }
 }
 
+async function fetchWikiTrending() {
+  try {
+    const d = await fetchJson(
+      'https://en.wikipedia.org/api/rest_v1/feed/featured/' + new Date().toISOString().slice(0,10).replace(/-/g,'/'),
+      { ttlMs: 600000, key: 'wiki-featured', timeoutMs: 10000 }
+    );
+    store.apiCalls += 1;
+    const outs = [];
+    const news = (d.news && d.news) || [];
+    for (const n of news.slice(0, 8)) {
+      const title = (n.links && n.links[0] && n.links[0].titles && n.links[0].titles.normalized) || (n.story && n.story) || '';
+      const words = tokenize(typeof title === 'string' ? title : '');
+      if (words.length) outs.push(upsertMeme({ keywords: words.slice(0, 4), source: 'wiki-featured', heat: 1.1, id: `wiki-${words[0]}` }));
+    }
+    const most = d.mostread && d.mostread.articles || [];
+    for (const a of most.slice(0, 8)) {
+      const words = tokenize(a.titles && a.titles.normalized || a.title || '');
+      if (words.length) outs.push(upsertMeme({ keywords: words.slice(0, 4), source: 'wiki-mostread', heat: 1.0, id: `wikim-${words[0]}` }));
+    }
+    if (outs.length) store.sources.googleTrends = true; // reuse slot as "web trends"
+    return outs.filter(Boolean);
+  } catch (e) {
+    store.lastError = `wiki:${e.message}`;
+    return [];
+  }
+}
+
 async function tickViral({ force = false } = {}) {
   if (!force && store.lastFetchAt && Date.now() - store.lastFetchAt < 3 * 60e3) {
     return stats();
@@ -216,6 +243,7 @@ async function tickViral({ force = false } = {}) {
     fetchRedditRising(),
     fetchGoogleTrends(),
     fetchYoutubePopular(),
+    fetchWikiTrending(),
   ]);
   // Apify sparse — fire-and-forget cadence
   if (Math.random() < 0.15) await fetchApifySocialSparingly();

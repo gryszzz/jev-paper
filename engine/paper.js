@@ -94,7 +94,7 @@ const DEFAULTS = {
   laneCaps: { ...DEFAULT_LANE_CAPS },
   lanes: { ...LANE_DEFAULTS },
   whaleDropPct: 15,
-  whalePollMs: 20000,
+  whalePollMs: 45000,
   scanIntervalMs: 22000,
   priceIntervalMs: 8000,
   lossStreakLimit: 3,
@@ -1043,12 +1043,13 @@ class PaperEngine {
 
   async fetchPairsForMints(mints) {
     const out = [];
-    const chunk = 25;
+    const chunk = 12;
+    let warned = false;
     for (let i = 0; i < mints.length; i += chunk) {
       const slice = mints.slice(i, i + chunk);
       try {
         const d = await fetchJson(`${DS}/latest/dex/tokens/${slice.join(',')}`, {
-          ttlMs: 8000,
+          ttlMs: 25000,
           key: `ds-tok-${slice[0]}-${slice.length}`,
         });
         const byMint = new Map();
@@ -1060,8 +1061,14 @@ class PaperEngine {
           if (!prev || n.liquidity > prev.liquidity) byMint.set(n.mint, n);
         }
         out.push(...byMint.values());
+        // gentle pacing between chunks
+        if (i + chunk < mints.length) await new Promise((r) => setTimeout(r, 350));
       } catch (e) {
-        console.warn('tokens batch', e.message);
+        if (!warned) {
+          warned = true;
+          console.warn('tokens batch', e.message);
+        }
+        if (/429|backoff/i.test(String(e.message))) break; // stop hammering
       }
     }
     return out;
@@ -1146,7 +1153,7 @@ class PaperEngine {
       // Boost smart-money entry mints
       for (const m of Object.keys(state._smartEntryMints || {})) mintSet.add(m);
 
-      const mints = [...mintSet].slice(0, 80);
+      const mints = [...mintSet].slice(0, 48);
       const pairs = await this.fetchPairsForMints(mints);
       for (const p of pairs) {
         if (!p.icon && icons.has(p.mint)) p.icon = icons.get(p.mint);
@@ -2425,7 +2432,11 @@ class PaperEngine {
             }
           }
         } catch (e) {
-          console.warn('whale', pos.symbol, e.message);
+          if (e && e.code === 'RPC_COOLDOWN') {
+            // silent — global cooldown already logged once/min
+          } else if (!/429|cooldown|rate/i.test(String(e && e.message))) {
+            console.warn('whale', pos.symbol, e.message);
+          }
         }
       }
       state.agents.whale.holdersPreview = preview;
