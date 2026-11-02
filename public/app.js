@@ -713,7 +713,9 @@
         ['Executor fill', dl.executorMs != null ? dl.executorMs + 'ms' : '—', 'jito+mev sim'],
         ['Whale poll', dl.whaleMs != null ? dl.whaleMs + 'ms' : '—', 'holders'],
         ['Helius', rt.heliusConfigured || rpc.helius ? 'optional free' : 'unset', 'not required'],
-        ['X buzz', (state.xBuzz && state.xBuzz.mode) || 'stub', (state.xBuzz && state.xBuzz.enabled) ? 'on' : 'off'],
+        ['X buzz', (state.xBuzz && state.xBuzz.mode) || 'stub', (state.xBuzz && state.xBuzz.authFails) ? ('auth-fail×' + state.xBuzz.authFails) : ((state.xBuzz && state.xBuzz.enabled) ? ('on · ' + (state.xBuzz.signals || 0) + ' sig') : 'off')],
+        ['Catalyst', (state.catalyst && state.catalyst.mode) || '—', (state.catalyst ? ((state.catalyst.signals || 0) + ' sig · ' + (state.catalyst.matches || 0) + ' match') : '—')],
+        ['Copy leaders', (state.smartWalletMiner && state.smartWalletMiner.copy && state.smartWalletMiner.copy.source) || '—', (state.smartWalletMiner && state.smartWalletMiner.copy) ? ((state.smartWalletMiner.copy.fetched || 0) + ' fetched · ' + (state.smartWalletMiner.copy.promoted || 0) + ' promo') : 'pending'],
       ];
       latEl.innerHTML = rows
         .map(([a, b, c]) => `<div class="strategy-row"><span>${a}</span><strong>${b} · ${c}</strong></div>`)
@@ -727,7 +729,7 @@
         ? top
             .map((w) => {
               const addr = w.address || '';
-              return `<div class="whale-row"><span>${w.label || 'wallet'} · ${shortAddr(addr)}</span><strong>score ${Math.round(w.score || 0)} · ${w.buys || 0}B/${w.sells || 0}S${w.mined ? ' · mined' : ''}</strong></div>`;
+              return `<div class="whale-row"><span>${w.label || 'wallet'} · ${shortAddr(addr)}</span><strong>score ${Math.round(w.score || 0)} · ${w.buys || 0}B/${w.sells || 0}S${w.mined ? ' · mined' : ''}${w.copy ? ' · copy' : ''}</strong></div>`;
             })
             .join('')
         : '<div class="whale-row"><span>Miner idle — will populate from launches</span></div>';

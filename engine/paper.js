@@ -1729,7 +1729,6 @@ class PaperEngine {
         if (se && now() - se.ts < 15 * 60e3) {
           r.score = Math.min(100, r.score + 8);
           r.breakdown = [...(r.breakdown || []), { k: 'smartMoney', v: 8, note: 'WS buy signal' }];
-          r.pass = r.score >= (settings.minScore || 70);
         }
         // Eyes + learned bonus
         if (p._eyesBoost) {
@@ -1768,7 +1767,19 @@ class PaperEngine {
           r.score = Math.max(0, Math.min(100, r.score + lb));
           r.breakdown = [...(r.breakdown || []), { k: 'learn', v: lb, note: 'promoted weights' }];
         }
+        // Score threshold, then hard FRESH floors — novelty/boosts cannot revive thin zero-vol
         r.pass = r.score >= (settings.minScore || 70);
+        if (p.lane === LANE.FRESH) {
+          const u = Number(p.uniqueBuyers || p.buyersM5 || 0) || 0;
+          const b5 = Number(p.buysM5) || 0;
+          const v5 = Math.max(Number(p.volumeM5) || 0, (Number(p.volumeH1) || 0) * 0.35);
+          if (u < 3 && b5 < 5) r.pass = false;
+          if (v5 < 500) r.pass = false;
+          const novPts = (r.breakdown || [])
+            .filter((b) => b && b.k === 'novelty')
+            .reduce((s, b) => s + (Number(b.v) || 0), 0);
+          if ((r.score || 0) - novPts < 40) r.pass = false;
+        }
         scored.push({ ...p, ...r, narratives: p.narratives || r.narratives || tagCoin(p), features: feat });
       }
       // Stale-on-board penalty: mints sitting on scored >60m get crushed

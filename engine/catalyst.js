@@ -395,7 +395,10 @@ async function pollWatchlistX() {
     return out;
   } catch (e) {
     store.lastError = e.message;
-    if (/401|403/.test(String(e.message))) store.authFails = (store.authFails || 0) + 1;
+    if (/401|403/.test(String(e.message))) {
+      store.authFails = (store.authFails || 0) + 1;
+      store.mode = APIFY_TOKEN ? 'apify' : 'viral-fallback';
+    }
     return null;
   }
 }
@@ -430,7 +433,33 @@ async function pollApifyFallback() {
   }
 }
 
+/**
+ * Scan recent non-watchlist posts for engagement-velocity spikes and promote them
+ * so matchPair can bind famous/viral chatter to new launches.
+ */
+function engagementVelocityScan() {
+  const cut = Date.now() - WINDOW_MS;
+  let promoted = 0;
+  for (const ev of store.events) {
+    if ((ev.ts || 0) < cut) continue;
+    if (ev.watchlisted) continue;
+    const ageMin = Math.max(0.5, (Date.now() - ev.ts) / 60000);
+    const engPerMin = (ev.engagement || 0) / ageMin;
+    if (engPerMin >= 25 || (ev.engagement || 0) >= 200) {
+      if ((ev.velocity || 0) < 8) {
+        ev.velocity = Math.min(25, Math.round(engPerMin / 2) + 5);
+        promoted += 1;
+        store.signals += 1;
+      }
+      for (const kw of ev.keywords || []) bumpKeyword(kw, 2, ev.ts);
+      for (const t of ev.tickers || []) bumpKeyword(`$${String(t).toLowerCase()}`, 3, ev.ts);
+    }
+  }
+  return promoted;
+}
+
 async function tickCatalyst({ viralStats } = {}) {
+
   await pollWatchlistX().catch(() => {});
   await pollApifyFallback().catch(() => {});
   // Pull keyword spikes from viral module stats if provided
@@ -481,6 +510,7 @@ module.exports = {
   matchPair,
   tickCatalyst,
   pollWatchlistX,
+  engagementVelocityScan,
   stats,
   store,
 };

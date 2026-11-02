@@ -18,6 +18,7 @@ const {
   rankWallets,
   isSmartWallet,
 } = require('./smartMoney');
+const fomoCopy = require('./fomoCopy');
 
 const DS = 'https://api.dexscreener.com';
 const MINER = {
@@ -161,6 +162,14 @@ async function runMiner(state, ctx = {}) {
       // Cap RPC pressure — only every other mint per pass if many
       if (mints.indexOf(m) % 2 === 0) await mineTopHolders(reg, m, { limit: 5 });
     }
+    // Fomo / top-trader copy leaders (GMGN free; FomoRadar if keyed) — throttle ~15m
+    if (Date.now() - (fomoCopy.STATS.lastRunAt || 0) > 15 * 60e3 || ctx.forceCopy) {
+      try {
+        await fomoCopy.ingestCopyLeaders(state, { period: '7d', limit: 35 });
+      } catch (e) {
+        MINER.lastError = e.message;
+      }
+    }
     // Cap registry size
     if ((reg.wallets || []).length > 120) {
       reg.wallets = rankWallets(reg).slice(0, 100);
@@ -183,6 +192,7 @@ function minerStats(state) {
   return {
     ...MINER,
     wallets: (reg.wallets || []).length,
+    copy: fomoCopy.copyStats(),
     top: rankWallets(reg)
       .filter((w) => !w.skipEntry)
       .slice(0, 12)
@@ -193,6 +203,8 @@ function minerStats(state) {
         buys: w.buys || 0,
         sells: w.sells || 0,
         mined: !!w.mined,
+        copy: !!w.copy,
+        copySource: w.copySource || null,
       })),
   };
 }
