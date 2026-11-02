@@ -16,16 +16,37 @@ async function pumpNewTokens() {
       const d = await fetchJson(url, { ttlMs: 12000, key: `pump-${url.slice(-24)}`, timeoutMs: 10000 });
       const arr = Array.isArray(d) ? d : d.coins || d.data || [];
       return arr
-        .map((c) => ({
-          mint: c.mint || c.address,
-          symbol: c.symbol,
-          name: c.name,
-          icon: c.image_uri || c.imageUri || c.uri,
-          marketCap: Number(c.usd_market_cap || c.market_cap || 0),
-          createdAt: c.created_timestamp || c.createdAt,
-          complete: !!(c.complete || c.raydium_pool),
-          source: 'pump.fun',
-        }))
+        .map((c) => {
+          const mc = Number(c.usd_market_cap || c.market_cap || 0);
+          const vSol = Number(c.virtual_sol_reserves || c.virtualSolReserves || 0);
+          // ~85 SOL virtual ≈ graduation; fall back to mcap proxy
+          let bondingProgress = null;
+          if (c.complete || c.raydium_pool) bondingProgress = 1;
+          else if (vSol > 0) bondingProgress = Math.max(0, Math.min(1, vSol / 85));
+          else if (mc > 0) bondingProgress = Math.max(0, Math.min(1, mc / 85000));
+          const created = c.created_timestamp || c.createdAt;
+          const createdMs = created
+            ? created < 1e12
+              ? Number(created) * 1000
+              : Number(created)
+            : null;
+          return {
+            mint: c.mint || c.address,
+            symbol: c.symbol,
+            name: c.name,
+            icon: c.image_uri || c.imageUri || c.uri,
+            marketCap: mc,
+            createdAt: created,
+            createdMs,
+            complete: !!(c.complete || c.raydium_pool),
+            raydiumPool: c.raydium_pool || c.raydiumPool || null,
+            bondingProgress,
+            kingOfHill: !!(c.king_of_the_hill_timestamp || c.kingOfTheHillTimestamp),
+            hasSocials: !!(c.twitter || c.telegram || c.website),
+            creator: c.creator || c.deployer || null,
+            source: 'pump.fun',
+          };
+        })
         .filter((x) => x.mint);
     } catch (_) {}
   }
@@ -42,16 +63,31 @@ async function pumpGraduating() {
       const d = await fetchJson(url, { ttlMs: 15000, key: `pump-grad-${url.slice(-20)}` });
       const arr = Array.isArray(d) ? d : d.coins || [];
       return arr
-        .filter((c) => c && (c.complete || Number(c.usd_market_cap || 0) > 40000))
-        .map((c) => ({
-          mint: c.mint,
-          symbol: c.symbol,
-          name: c.name,
-          icon: c.image_uri,
-          marketCap: Number(c.usd_market_cap || 0),
-          graduating: true,
-          source: 'pump.grad',
-        }))
+        .filter((c) => {
+          if (!c) return false;
+          const mc = Number(c.usd_market_cap || 0);
+          const vSol = Number(c.virtual_sol_reserves || 0);
+          const prog = c.complete ? 1 : vSol > 0 ? vSol / 85 : mc / 85000;
+          return c.complete || prog >= 0.65 || mc > 40000;
+        })
+        .map((c) => {
+          const mc = Number(c.usd_market_cap || 0);
+          const vSol = Number(c.virtual_sol_reserves || 0);
+          const bondingProgress = c.complete ? 1 : vSol > 0 ? Math.min(1, vSol / 85) : Math.min(1, mc / 85000);
+          return {
+            mint: c.mint,
+            symbol: c.symbol,
+            name: c.name,
+            icon: c.image_uri,
+            marketCap: mc,
+            bondingProgress,
+            complete: !!c.complete,
+            graduating: bondingProgress >= 0.7 || !!c.complete,
+            hasSocials: !!(c.twitter || c.telegram || c.website),
+            creator: c.creator || null,
+            source: 'pump.grad',
+          };
+        })
         .filter((x) => x.mint);
     } catch (_) {}
   }

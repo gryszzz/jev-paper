@@ -4,6 +4,7 @@ const { rugcheck, socialVelocity } = require('./sources');
 const { applyWeights, ensureWeights } = require('./feedback');
 const { tagCoin, narrativeHeat } = require('./narratives');
 const { smartMoneyOverlap } = require('./smartMoney');
+const { bondingProgress, hasSocials, LANE } = require('./lanes');
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
@@ -49,11 +50,15 @@ async function scorePair(pair, settings, ctx = {}) {
   const heatMap = ctx.heatMap || {};
   const smartReg = ctx.smartMoney || null;
 
+  const lane = pair.lane || (pair._laneInfo && pair._laneInfo.lane) || null;
   const liq = pair.liquidity || 0;
-  if (liq < (settings.minLiquidity || 38000)) {
-    return { score: 0, pass: false, breakdown: [{ k: 'liquidity', v: 0, note: 'below min' }], rug: null };
+  let minLiq = settings.minLiquidity || 38000;
+  if (lane === LANE.FRESH) minLiq = Math.min(minLiq, (settings.lanes && settings.lanes.freshMinLiq) || 2500);
+  else if (lane === LANE.GRAD) minLiq = Math.min(minLiq, (settings.lanes && settings.lanes.gradMinLiq) || 8000);
+  if (liq < minLiq) {
+    return { score: 0, pass: false, breakdown: [{ k: 'liquidity', v: 0, note: `below min $${minLiq}` }], rug: null, lane };
   }
-  const liqScore = clamp((Math.log10(liq) - Math.log10(settings.minLiquidity)) / 2, 0, 1) * 16;
+  const liqScore = clamp((Math.log10(Math.max(liq, 1)) - Math.log10(Math.max(minLiq, 1))) / 2, 0, 1) * 16;
   score += liqScore;
   breakdown.push({ k: 'liquidity', v: Math.round(liqScore), note: `$${Math.round(liq / 1000)}k` });
 
@@ -89,12 +94,26 @@ async function scorePair(pair, settings, ctx = {}) {
 
   const ageH = pair.ageMs != null ? pair.ageMs / 3600000 : 24;
   let ageScore = 8;
-  if (ageH < 0.05) ageScore = 2;
-  else if (ageH < 0.25) ageScore = 10;
-  else if (ageH < 6) ageScore = 14;
-  else if (ageH < 24) ageScore = 10;
-  else if (ageH < 72) ageScore = 6;
-  else ageScore = 3;
+  // Fresh lane: first minutes are the edge — reward ultra-young
+  if (lane === LANE.FRESH) {
+    if (ageH < 0.02) ageScore = 14;      // < ~1.2m
+    else if (ageH < 0.08) ageScore = 16; // < ~5m
+    else if (ageH < 0.25) ageScore = 12;
+    else if (ageH < 0.5) ageScore = 8;
+    else ageScore = 3;
+  } else if (lane === LANE.GRAD) {
+    if (ageH < 1) ageScore = 12;
+    else if (ageH < 6) ageScore = 14;
+    else if (ageH < 24) ageScore = 8;
+    else ageScore = 4;
+  } else {
+    if (ageH < 0.05) ageScore = 2;
+    else if (ageH < 0.25) ageScore = 10;
+    else if (ageH < 6) ageScore = 14;
+    else if (ageH < 24) ageScore = 10;
+    else if (ageH < 72) ageScore = 6;
+    else ageScore = 3;
+  }
   score += ageScore;
   breakdown.push({ k: 'age', v: ageScore, note: ageH < 1 ? `${Math.round(ageH * 60)}m` : `${ageH.toFixed(1)}h` });
 
@@ -122,6 +141,39 @@ async function scorePair(pair, settings, ctx = {}) {
   if (pair.graduating || pair.source === 'pump.grad' || (pair.source || '').includes('migration')) {
     score += 8;
     breakdown.push({ k: 'graduation', v: 8, note: 'grad / migration' });
+  }
+
+  const prog = bondingProgress(pair);
+  if (prog != null) {
+    let bp = 0;
+    if (prog >= 0.7 && prog < 0.95) bp = 12; // about-to-moon sweet spot
+    else if (prog >= 0.95) bp = 6;
+    else if (prog >= 0.4 && lane === LANE.FRESH) bp = 4;
+    if (bp) {
+      score += bp;
+      breakdown.push({ k: 'bonding', v: bp, note: `${Math.round(prog * 100)}% curve` });
+    }
+  }
+  if (lane === LANE.FRESH) {
+    let freshPts = 6;
+    if (hasSocials(pair)) freshPts += 3;
+    if (bpm >= 2) freshPts += 3;
+    if (pressure >= 1.2) freshPts += 2;
+    score += freshPts;
+    breakdown.push({ k: 'freshLane', v: freshPts, note: hasSocials(pair) ? 'socials+mom' : 'momentum' });
+  } else if (lane === LANE.GRAD) {
+    score += 5;
+    breakdown.push({ k: 'gradLane', v: 5, note: 'about-to-moon' });
+  }
+
+  // De-prioritize large established mcaps (soft score hit; hard gate in lanes)
+  const maxMc = settings.maxMarketCapUsd || 8_000_000;
+  if (mc > maxMc) {
+    score -= 18;
+    breakdown.push({ k: 'mcapCap', v: -18, note: `$${Math.round(mc / 1e6)}M > cap` });
+  } else if (mc > maxMc * 0.6) {
+    score -= 6;
+    breakdown.push({ k: 'mcapCap', v: -6, note: 'approaching cap' });
   }
 
   const social = await socialVelocity(pair);
@@ -218,9 +270,14 @@ async function scorePair(pair, settings, ctx = {}) {
   }
 
   finalScore = clamp(Math.round(finalScore), 0, 100);
+  // Lane-specific minScore: fresh slightly lower barrier (edge decays fast)
+  let minScore = settings.minScore || 70;
+  if (lane === LANE.FRESH) minScore = Math.max(52, minScore - 8);
+  else if (lane === LANE.GRAD) minScore = Math.max(55, minScore - 5);
+
   return {
     score: finalScore,
-    pass: finalScore >= (settings.minScore || 70),
+    pass: finalScore >= minScore,
     breakdown: finalBreakdown,
     rug,
     social,
@@ -230,6 +287,8 @@ async function scorePair(pair, settings, ctx = {}) {
     buyersPerMin: bpm,
     pressure,
     smartMoney: smMeta,
+    lane,
+    bondingProgress: prog,
   };
 }
 

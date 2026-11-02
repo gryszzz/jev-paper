@@ -391,11 +391,15 @@
         const img = it.icon || iconFallback(it.symbol);
         const agent = (it.agent || 'EXEC').replace(/^Risk.*/, 'Risk').replace(/^Whale.*/, 'Whale');
         const size = it.amountUsd != null ? money(it.amountUsd, 0) : '';
+        const lane = (it.lane || '').toUpperCase();
+        const laneBadge = lane
+          ? `<span class="tr-lane lane-${lane.toLowerCase()}">${lane}</span>`
+          : '';
         const subBits = [agent, size, ago(it.ts)].filter(Boolean).join(' · ');
         return `<div class="trade-row" data-mint="${it.mint || ''}">
           <img src="${img}" alt="" onerror="this.src='${iconFallback(it.symbol)}'"/>
           <div class="tr-mid">
-            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'}</div>
+            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'} ${laneBadge}</div>
             <div class="tr-sub"><span class="tr-agent">${agent}</span><span>${subBits.replace(agent + ' · ', '')}</span></div>
           </div>
           ${right}
@@ -470,9 +474,10 @@
         const img = it.icon
           ? `<img src="${it.icon}" alt="" onerror="this.src='${iconFallback(it.symbol)}'"/>`
           : `<img src="${iconFallback(it.symbol)}" alt=""/>`;
+        const lane = it.lane ? ` <span class="tr-lane lane-${String(it.lane).toLowerCase()}">${it.lane}</span>` : '';
         return `<div class="act" role="button" data-mint="${it.mint || ''}">
           ${img}
-          <div><div class="t1">${it.type} · ${it.symbol || ''}</div>
+          <div><div class="t1">${it.type} · ${it.symbol || ''}${lane}</div>
           <div class="t2">${it.agent || ''} · ${it.detail || ''} · ${ago(it.ts)}</div></div>
           ${right}
         </div>`;
@@ -496,6 +501,20 @@
     ]
       .map(([lbl, val]) => `<div class="stat-card"><div class="lbl">${lbl}</div><div class="val">${val}</div></div>`)
       .join('');
+
+    const byLane = st.byLane || {};
+    const laneKeys = ['FRESH', 'GRAD', 'MOVER'].filter((k) => byLane[k]);
+    const laneEl = $('laneStats');
+    if (laneEl) {
+      laneEl.innerHTML = laneKeys.length
+        ? laneKeys
+            .map((k) => {
+              const r = byLane[k] || {};
+              return `<div class="strategy-row"><span class="tr-lane lane-${k.toLowerCase()}">${k}</span><strong>${r.buys || r.trades || 0} buys · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L</strong></div>`;
+            })
+            .join('')
+        : '<div class="strategy-row"><span>No lane fills yet</span></div>';
+    }
 
     const by = st.byStrategy || {};
     const keys = Object.keys(by);
@@ -537,6 +556,7 @@
     $('startBal').value = state.startingBalance || 100;
     $('slippage').value = s.slippage ?? 0.02;
     $('minLiq').value = s.minLiquidity ?? 38000;
+    if ($('maxMcap')) $('maxMcap').value = s.maxMarketCapUsd ?? 8000000;
     $('minScore').value = s.minScore ?? 70;
     $('whaleDrop').value = s.whaleDropPct ?? 15;
     $('whalePoll').value = s.whalePollMs ?? 20000;
@@ -716,6 +736,7 @@
           startingBalance: Number($('startBal').value),
           slippage: Number($('slippage').value),
           minLiquidity: Number($('minLiq').value),
+          maxMarketCapUsd: Number($('maxMcap') && $('maxMcap').value),
           minScore: Number($('minScore').value),
           whaleDropPct: Number($('whaleDrop').value),
           whalePollMs: Number($('whalePoll').value),

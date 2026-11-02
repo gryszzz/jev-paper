@@ -27,6 +27,21 @@ const {
   smartMoneyOverlap,
 } = require('./smartMoney');
 const { tagCoin, updateHeatMap, exposureByNarrative } = require('./narratives');
+const {
+  LANE,
+  DEFAULT_LANE_CAPS,
+  LANE_DEFAULTS,
+  classifyLane,
+  laneGates,
+  lanePriority,
+  laneSizeMult,
+  laneRiskProfile,
+  exposureByLane,
+  laneCapOk,
+  bumpLaneStats,
+  bondingProgress,
+  hasSocials,
+} = require('./lanes');
 
 const DS = 'https://api.dexscreener.com';
 
@@ -50,6 +65,10 @@ const DEFAULTS = {
   ],
   trailRemainder: true,
   preferGraduating: true,
+  preferEarlyLanes: true,
+  maxMarketCapUsd: 8_000_000,
+  laneCaps: { ...DEFAULT_LANE_CAPS },
+  lanes: { ...LANE_DEFAULTS },
   whaleDropPct: 15,
   whalePollMs: 20000,
   scanIntervalMs: 22000,
@@ -147,6 +166,22 @@ function normalizePair(p) {
   };
 }
 
+
+function ensureLaneSettings(state) {
+  if (!state || !state.settings) return state;
+  const s = state.settings;
+  if (s.maxMarketCapUsd == null) s.maxMarketCapUsd = DEFAULTS.maxMarketCapUsd;
+  if (s.preferEarlyLanes == null) s.preferEarlyLanes = true;
+  s.laneCaps = { ...DEFAULT_LANE_CAPS, ...(s.laneCaps || {}) };
+  s.lanes = { ...LANE_DEFAULTS, ...(s.lanes || {}) };
+  state.stats = state.stats || emptyStats();
+  state.stats.byLane = state.stats.byLane || emptyStats().byLane;
+  for (const k of ['FRESH', 'GRAD', 'MOVER']) {
+    state.stats.byLane[k] = state.stats.byLane[k] || { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 };
+  }
+  return state;
+}
+
 function emptyStats() {
   return {
     trades: 0,
@@ -164,6 +199,7 @@ function emptyStats() {
     sweeps: 0,
     sweptUsd: 0,
     byStrategy: {},
+    byLane: { FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } },
   };
 }
 
@@ -202,6 +238,10 @@ function emptyState(settings = {}) {
       takeProfitLadder: merged.takeProfitLadder,
       trailRemainder: merged.trailRemainder,
       preferGraduating: merged.preferGraduating,
+      preferEarlyLanes: merged.preferEarlyLanes ?? DEFAULTS.preferEarlyLanes,
+      maxMarketCapUsd: merged.maxMarketCapUsd ?? DEFAULTS.maxMarketCapUsd,
+      laneCaps: { ...DEFAULT_LANE_CAPS, ...(merged.laneCaps || {}) },
+      lanes: { ...LANE_DEFAULTS, ...(merged.lanes || {}) },
       whaleDropPct: merged.whaleDropPct ?? DEFAULTS.whaleDropPct,
       whalePollMs: merged.whalePollMs ?? DEFAULTS.whalePollMs,
       lossStreakLimit: merged.lossStreakLimit ?? DEFAULTS.lossStreakLimit,
@@ -312,7 +352,7 @@ function migrateState(raw) {
       ...raw.settings,
       takeProfitLadder: (raw.settings && raw.settings.takeProfitLadder) || DEFAULTS.takeProfitLadder,
     };
-    return raw;
+    return ensureLaneSettings(raw);
   }
   // v1 → v2
   const s = emptyState(raw.settings || {});
@@ -386,6 +426,7 @@ class PaperEngine {
   async _init() {
     const raw = await loadState();
     this.state = migrateState(raw);
+    this.state = ensureLaneSettings(this.state);
     this.state.mode = 'paper';
     this.state.liveEnabled = false;
     ensureWeights(this.state);
@@ -642,6 +683,8 @@ class PaperEngine {
         cooldownMs: next.cooldownMs,
         slippage: next.slippage,
         preferGraduating: next.preferGraduating,
+        preferEarlyLanes: next.preferEarlyLanes,
+        maxMarketCapUsd: next.maxMarketCapUsd,
         lossStreakLimit: next.lossStreakLimit,
         lossStreakCooldownMs: next.lossStreakCooldownMs,
         maxNarrativePct: next.maxNarrativePct,
@@ -652,7 +695,7 @@ class PaperEngine {
     const keys = [
       'minLiquidity', 'buyPctMin', 'buyPctMax', 'maxPositions', 'stopPct', 'trailPct',
       'slippage', 'minScore', 'running', 'kellyCap', 'maxDailyLossPct', 'cooldownMs',
-      'whaleDropPct', 'whalePollMs', 'preferGraduating',
+      'whaleDropPct', 'whalePollMs', 'preferGraduating', 'preferEarlyLanes', 'maxMarketCapUsd',
       'lossStreakLimit', 'lossStreakCooldownMs', 'maxNarrativePct', 'profitSweepPct', 'profitSweepTrigger',
       'liveMaxPerTradeUsd', 'liveMaxDailySpendUsd', 'liveMaxDailyLossUsd', 'liveWalletBalanceCapUsd',
     ];
@@ -662,6 +705,12 @@ class PaperEngine {
       else if (Number.isFinite(Number(patch[k]))) s[k] = Number(patch[k]);
     }
     if (Array.isArray(patch.takeProfitLadder)) s.takeProfitLadder = patch.takeProfitLadder;
+    if (patch.laneCaps && typeof patch.laneCaps === 'object') {
+      s.laneCaps = { ...DEFAULT_LANE_CAPS, ...s.laneCaps, ...patch.laneCaps };
+    }
+    if (patch.lanes && typeof patch.lanes === 'object') {
+      s.lanes = { ...LANE_DEFAULTS, ...s.lanes, ...patch.lanes };
+    }
     if (patch.startingBalance != null && Number(patch.startingBalance) > 0) {
       this.state.startingBalance = Number(patch.startingBalance);
     }
@@ -749,12 +798,28 @@ class PaperEngine {
           if (r.symbol && r.icon) icons.set(r.mint, r.icon);
         }
       }
-      for (const p of pumpNew) if (p.mint) mintSet.add(p.mint);
+      const pumpMeta = new Map(); // mint -> enriched pump fields
+      for (const p of pumpNew) {
+        if (!p.mint) continue;
+        mintSet.add(p.mint);
+        pumpMeta.set(p.mint, { ...p, source: p.source || 'pump.fun' });
+      }
       for (const p of pumpGrad) {
-        if (p.mint) {
-          mintSet.add(p.mint);
-          graduating.add(p.mint);
-        }
+        if (!p.mint) continue;
+        mintSet.add(p.mint);
+        graduating.add(p.mint);
+        const prev = pumpMeta.get(p.mint) || {};
+        pumpMeta.set(p.mint, { ...prev, ...p, graduating: true, source: p.source || 'pump.grad' });
+      }
+      for (const r of rt) {
+        if (!r.mint) continue;
+        const prev = pumpMeta.get(r.mint) || {};
+        pumpMeta.set(r.mint, {
+          ...prev,
+          ...r,
+          source: r.source || prev.source,
+          graduating: !!(r.graduating || prev.graduating),
+        });
       }
       for (const g of gecko) if (g.mint) mintSet.add(g.mint);
       // Boost smart-money entry mints
@@ -764,9 +829,28 @@ class PaperEngine {
       const pairs = await this.fetchPairsForMints(mints);
       for (const p of pairs) {
         if (!p.icon && icons.has(p.mint)) p.icon = icons.get(p.mint);
+        const pm = pumpMeta.get(p.mint);
+        if (pm) {
+          if (pm.source) p.source = pm.source;
+          if (pm.bondingProgress != null) p.bondingProgress = pm.bondingProgress;
+          if (pm.hasSocials) p.hasSocials = true;
+          if (pm.creator) p.creator = pm.creator;
+          if (pm.complete) p.complete = true;
+          if (pm.raydiumPool) p.raydiumPool = pm.raydiumPool;
+          if (pm.createdMs && !p.pairCreatedAt) {
+            p.pairCreatedAt = pm.createdMs;
+            p.ageMs = now() - pm.createdMs;
+          }
+          if (pm.graduating) {
+            p.graduating = true;
+            graduating.add(p.mint);
+          }
+          if (!p.icon && pm.icon) p.icon = pm.icon;
+          if (!p.marketCap && pm.marketCap) p.marketCap = pm.marketCap;
+        }
         if (graduating.has(p.mint)) {
           p.graduating = true;
-          p.source = 'pump.grad';
+          if (!p.source || p.source === 'dex') p.source = 'pump.grad';
         }
         const meta = ds.meta && ds.meta.get(p.mint);
         if (meta) {
@@ -774,30 +858,57 @@ class PaperEngine {
           p.websites = meta.websites || p.websites;
         }
         if (icons.has(p.mint) || (ds.mints || []).includes(p.mint)) p.boosted = true;
+        // classify lane early
+        const info = classifyLane(p, settings);
+        p.lane = info.lane;
+        p._laneInfo = info;
+        if (info.progress != null && p.bondingProgress == null) p.bondingProgress = info.progress;
+        p.buyersPerMin = (Number(p.buysM5) || 0) / 5;
       }
 
       state.agents.scanner.pools = pairs.length;
+      const laneExp = exposureByLane(state.positions);
+      state.agents.scanner.laneExposure = laneExp;
+
       const filtered = pairs
-        .filter((p) => !isMajor(p) && p.liquidity >= settings.minLiquidity && p.priceUsd > 0)
+        .filter((p) => !isMajor(p) && p.priceUsd > 0)
         .filter((p) => !state.ruggedDevs.includes(p.mint))
+        .filter((p) => {
+          const g = laneGates(p, p._laneInfo || classifyLane(p, settings), settings);
+          p._laneGate = g;
+          if (!g.ok) return false;
+          // lane-specific liquidity floor (gates handle FRESH/GRAD/MOVER)
+          if (p.lane === LANE.MOVER && p.liquidity < (settings.minLiquidity || 25000)) return false;
+          if (p.lane === LANE.FRESH && p.liquidity > 0 && p.liquidity < ((settings.lanes && settings.lanes.freshMinLiq) || 2500)) return false;
+          if (p.lane === LANE.GRAD && p.liquidity > 0 && p.liquidity < ((settings.lanes && settings.lanes.gradMinLiq) || 8000)) return false;
+          return true;
+        })
         .sort((a, b) => {
-          if (settings.preferGraduating) {
+          if (settings.preferEarlyLanes !== false) {
+            const dp = lanePriority(b.lane) - lanePriority(a.lane);
+            if (dp) return dp;
+          } else if (settings.preferGraduating) {
             const ag = a.graduating ? 1 : 0;
             const bg = b.graduating ? 1 : 0;
             if (bg !== ag) return bg - ag;
           }
-          return b.liquidity - a.liquidity;
+          // prefer faster bonding velocity / younger within lane
+          if (a.lane === LANE.FRESH || b.lane === LANE.FRESH) {
+            const aa = a.ageMs != null ? a.ageMs : 1e15;
+            const ba = b.ageMs != null ? b.ageMs : 1e15;
+            if (aa !== ba) return aa - ba;
+          }
+          return (b.volumeH1 || 0) - (a.volumeH1 || 0);
         });
 
       const rejects = pairs
-        .filter((p) => p.liquidity > 0 && p.liquidity < settings.minLiquidity)
-        .sort((a, b) => b.liquidity - a.liquidity)
+        .filter((p) => p._laneGate && !p._laneGate.ok)
         .slice(0, 3)
-        .map((p) => ({ symbol: p.symbol, icon: p.icon, tag: `liq $${Math.round(p.liquidity / 1000)}k`, ok: false }));
+        .map((p) => ({ symbol: p.symbol, icon: p.icon, tag: p._laneGate.why || 'skip', ok: false }));
       const goods = filtered.slice(0, 4).map((p) => ({
         symbol: p.symbol,
         icon: p.icon,
-        tag: p.graduating ? 'graduating' : '+ analyst',
+        tag: p.lane || (p.graduating ? 'GRAD' : 'scan'),
         ok: true,
       }));
       state.agents.scanner.recent = [...rejects.slice(0, 2), ...goods].slice(0, 5);
@@ -835,6 +946,11 @@ class PaperEngine {
       state.agents.risk.narrativeExposure = narrExp;
       const scored = [];
       for (const p of filtered.slice(0, 18)) {
+        if (!p.lane) {
+          const info = classifyLane(p, settings);
+          p.lane = info.lane;
+          p._laneInfo = info;
+        }
         let holders = [];
         try {
           // light holder peek for smart-money overlap on top candidates only
@@ -890,7 +1006,20 @@ class PaperEngine {
             return false;
           }
         }
+        const lane = p.lane || LANE.MOVER;
+        if (!laneCapOk(lane, state.positions, eqNow, settings)) {
+          p.laneCapHit = true;
+          return false;
+        }
         return true;
+      });
+      // Prefer FRESH/GRAD over MOVER when scores are close
+      candidates.sort((a, b) => {
+        if (settings.preferEarlyLanes !== false) {
+          const dp = lanePriority(b.lane) - lanePriority(a.lane);
+          if (dp && Math.abs((b.score || 0) - (a.score || 0)) < 12) return dp;
+        }
+        return (b.score || 0) - (a.score || 0);
       });
 
       // loss-streak cooldown already handled above; also block if streak cooldown
@@ -932,16 +1061,31 @@ class PaperEngine {
     for (const t of tags) {
       if ((narrExp[t] || 0) / Math.max(eq, 1) >= (settings.maxNarrativePct || 0.5) * 0.85) over = true;
     }
-    const frac = positionSizeFraction(pair.score, settings, {
+    const lane = pair.lane || (classifyLane(pair, settings).lane);
+    pair.lane = lane;
+    if (!laneCapOk(lane, state.positions, eq, settings)) {
+      addActivity(state, {
+        type: 'skip',
+        symbol: pair.symbol,
+        icon: pair.icon,
+        agent: 'Risk',
+        detail: `${lane} lane cap hit`,
+        mint: pair.mint,
+      });
+      return null;
+    }
+    let frac = positionSizeFraction(pair.score, settings, {
       priceChangeH1: pair.priceChangeH1,
       liquidity: pair.liquidity,
       narrativeOverExposed: over,
     });
+    frac *= laneSizeMult(lane, settings);
     let spend = round(eq * frac, 2);
     spend = Math.min(spend, round(state.cash * 0.95, 2));
     // Paper still respects live caps as soft training rails
     if (settings.liveMaxPerTradeUsd) spend = Math.min(spend, settings.liveMaxPerTradeUsd);
     if (spend < 2) return null;
+    const risk = laneRiskProfile(lane, settings);
 
     state.agents.executor.status = 'buying';
     state.agents.executor.progress = 0;
@@ -963,14 +1107,18 @@ class PaperEngine {
       markPrice: pair.priceUsd,
       liquidity: pair.liquidity,
       baseSlippage: settings.slippage,
-      urgency: pair.graduating ? 'high' : 'normal',
+      urgency: lane === LANE.FRESH || pair.graduating ? 'high' : 'normal',
+      lane,
     });
     const fillPrice = fill.fillPrice || pair.priceUsd * (1 + settings.slippage);
     const tokens = fill.tokens || spend / fillPrice;
     const feeUsd = round((fill.priorityFeeSol || 0) * (pair.solPriceUsd || 150) + spend * 0.0025, 4);
     const netSpend = round(spend + feeUsd, 4); // full priority fee drag
-    const stopPrice = fillPrice * (1 + settings.stopPct);
-    const ladder = (settings.takeProfitLadder || []).map((r) => ({
+    const stopPct = risk.stopPct != null ? risk.stopPct : settings.stopPct;
+    const trailPct = risk.trailPct != null ? risk.trailPct : settings.trailPct;
+    const stopPrice = fillPrice * (1 + stopPct);
+    const ladderSrc = risk.takeProfitLadder || settings.takeProfitLadder || [];
+    const ladder = ladderSrc.map((r) => ({
       ...r,
       hit: false,
     }));
@@ -987,12 +1135,14 @@ class PaperEngine {
       tokens,
       tokensInitial: tokens,
       stopPrice,
-      trailPct: settings.trailPct,
+      trailPct,
       highSinceEntry: fillPrice,
-      trailStop: fillPrice * (1 - settings.trailPct),
+      trailStop: fillPrice * (1 - trailPct),
       ladder,
       trailRemainder: !!settings.trailRemainder,
       openedAt: now(),
+      timeStopAt: risk.timeStopMs ? now() + risk.timeStopMs : null,
+      lane,
       score: pair.score,
       scoreBreakdown: pair.breakdown || [],
       markPrice: pair.priceUsd,
@@ -1006,6 +1156,7 @@ class PaperEngine {
       url: pair.url,
       pairAddress: pair.pairAddress,
       ageMs: pair.ageMs,
+      bondingProgress: pair.bondingProgress != null ? pair.bondingProgress : bondingProgress(pair),
       graduating: !!pair.graduating,
       fillSource: fill.source || 'paper',
       impactPct: fill.impactPct || 0,
@@ -1041,20 +1192,22 @@ class PaperEngine {
       feed.watchTokenTrades([pair.mint]);
     } catch (_) {}
 
+    bumpLaneStats(state.stats, lane, { isBuy: true });
     addActivity(state, {
       type: 'buy',
       symbol: pair.symbol,
       icon: pair.icon,
       agent: 'Executor',
-      detail: `${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'} · slip ${round(fill.impactPct || 0, 2)}% · ${fill.latencyMs || 0}ms`,
+      detail: `${lane} · ${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'} · slip ${round(fill.impactPct || 0, 2)}% · ${fill.latencyMs || 0}ms`,
       amountUsd: spend,
       pnl: null,
       pnlPct: null,
       mint: pair.mint,
+      lane,
     });
     setBanner(
       state,
-      `Bought ${pair.symbol} · $${spend.toFixed(2)} (${round(frac * 100, 0)}%) · Mode: PAPER`,
+      `Bought ${pair.symbol} [${lane}] · $${spend.toFixed(2)} (${round(frac * 100, 0)}%) · Mode: PAPER`,
       pair.icon
     );
 
@@ -1126,6 +1279,10 @@ class PaperEngine {
         closes.push({ pos, reason: 'stop', label: 'Risk hard stop', sellPct: 1 });
         continue;
       }
+      if (pos.timeStopAt && now() >= pos.timeStopAt) {
+        closes.push({ pos, reason: 'time', label: `Risk time-stop (${pos.lane || 'FRESH'})`, sellPct: 1 });
+        continue;
+      }
 
       // laddered take profits
       pos.ladder = pos.ladder || [];
@@ -1185,6 +1342,7 @@ class PaperEngine {
       baseSlippage: state.settings.slippage,
       urgency,
       reason,
+      lane: pos.lane || null,
     });
     const fillPrice = fill.fillPrice || (pos.markPrice || pos.entryPrice) * (1 - state.settings.slippage);
     const proceeds = round(fill.proceedsUsd != null ? fill.proceedsUsd : tokensToSell * fillPrice, 4);
@@ -1260,6 +1418,7 @@ class PaperEngine {
       state.stats.byStrategy[sid].trades += 1;
       state.stats.byStrategy[sid].pnl = round(state.stats.byStrategy[sid].pnl + pnl, 4);
       if (pnl >= 0) state.stats.byStrategy[sid].wins += 1;
+      bumpLaneStats(state.stats, pos.lane || LANE.MOVER, { pnl, win: pnl >= 0 });
       if (fullClose) {
         recordClosedTrade(state, {
           breakdown: pos.scoreBreakdown,
@@ -1275,7 +1434,13 @@ class PaperEngine {
     if (fullClose) this.maybeProfitSweep();
 
     const type =
-      reason === 'stop' ? 'stopped' : reason === 'whale' ? 'whale_exit' : reason === 'tp' ? 'tp' : 'sell';
+      reason === 'stop' || reason === 'time'
+        ? 'stopped'
+        : reason === 'whale'
+          ? 'whale_exit'
+          : reason === 'tp'
+            ? 'tp'
+            : 'sell';
     addActivity(state, {
       type,
       symbol: pos.symbol,
@@ -1285,14 +1450,17 @@ class PaperEngine {
         reason === 'whale'
           ? label
           : reason === 'tp'
-            ? `ladder ${pct * 100}%`
+            ? `${pos.lane || ''} ladder ${pct * 100}%`.trim()
             : reason === 'stop'
-              ? 'hard stop'
-              : 'trailing stop',
+              ? `${pos.lane || ''} hard stop`.trim()
+              : reason === 'time'
+                ? `${pos.lane || 'FRESH'} time-stop`
+                : `${pos.lane || ''} trailing stop`.trim(),
       amountUsd: proceeds,
       pnl,
       pnlPct,
       mint: pos.mint,
+      lane: pos.lane || null,
     });
 
     const sign = pnl >= 0 ? '+' : '';

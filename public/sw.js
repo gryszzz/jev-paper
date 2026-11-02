@@ -1,15 +1,15 @@
 /* JEV Paper SW — network-first shell, cache fallback offline */
-const CACHE = 'jev-paper-v8-20261102';
+const CACHE = 'jev-paper-v9-20261102';
 const ASSETS = [
   '/',
   '/index.html',
-  '/styles.css?v=8',
-  '/app.js?v=8',
-  '/manifest.json?v=8',
-  '/icons/icon-192.png?v=8',
-  '/icons/icon-512.png?v=8',
-  '/img/j-logo.svg?v=8',
-  '/img/j-mark.svg?v=8',
+  '/styles.css?v=9',
+  '/app.js?v=9',
+  '/manifest.json?v=9',
+  '/icons/icon-192.png?v=9',
+  '/icons/icon-512.png?v=9',
+  '/img/j-logo.svg?v=9',
+  '/img/j-mark.svg?v=9',
 ];
 
 self.addEventListener('install', (e) => {

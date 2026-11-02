@@ -30,13 +30,16 @@ function clamp(n, a, b) {
 }
 
 /** Dynamic slippage from liquidity + trade size (bps → fraction). */
-function dynamicSlippage({ liquidity = 0, amountUsd = 0, side = 'buy', base = 0.02 } = {}) {
+function dynamicSlippage({ liquidity = 0, amountUsd = 0, side = 'buy', base = 0.02, lane = null } = {}) {
   const liq = Math.max(Number(liquidity) || 0, 1);
   const size = Math.max(Number(amountUsd) || 0, 1);
   const impact = (size / liq) * (side === 'sell' ? 1.35 : 1.0);
   // thin books hurt more
   const thinPenalty = liq < 50000 ? 0.015 : liq < 100000 ? 0.008 : 0;
-  const slip = clamp(base * 0.5 + impact * 2.5 + thinPenalty, 0.005, 0.12);
+  let slip = clamp(base * 0.5 + impact * 2.5 + thinPenalty, 0.005, 0.12);
+  // Fresh / early graduations: worse fills (more adverse selection + thin curve)
+  if (lane === 'FRESH') slip = clamp(slip * 1.65 + 0.012, 0.015, 0.22);
+  else if (lane === 'GRAD') slip = clamp(slip * 1.25 + 0.005, 0.01, 0.16);
   return slip;
 }
 
@@ -50,8 +53,10 @@ function simulateJitoFee({ urgency = 'normal', liquidity = 0 } = {}) {
 }
 
 /** Artificial fill latency ms — higher on thin liquidity / high urgency. */
-function simulateLatencyMs({ liquidity = 0, urgency = 'normal' } = {}) {
-  const base = urgency === 'panic' ? 180 : urgency === 'high' ? 320 : 450;
+function simulateLatencyMs({ liquidity = 0, urgency = 'normal', lane = null } = {}) {
+  let base = urgency === 'panic' ? 180 : urgency === 'high' ? 320 : 450;
+  if (lane === 'FRESH') base += 280; // slower discovery / RPC / curve race
+  else if (lane === 'GRAD') base += 120;
   const thin = liquidity > 0 && liquidity < 50000 ? 200 : 0;
   const jitter = Math.floor(Math.random() * 120);
   return base + thin + jitter;
@@ -70,15 +75,17 @@ class PaperAdapter extends TradeAdapter {
   async quoteBuy(mint, amountUsd, markPrice, opts = {}) {
     const usd = Number(amountUsd) || 0;
     const liq = Number(opts.liquidity) || 0;
+    const lane = opts.lane || null;
     const dynSlip = dynamicSlippage({
       liquidity: liq,
       amountUsd: usd,
       side: 'buy',
       base: opts.baseSlippage != null ? opts.baseSlippage : this.fallbackSlippage,
+      lane,
     });
-    const urgency = opts.urgency || 'normal';
+    const urgency = opts.urgency || (lane === 'FRESH' ? 'high' : 'normal');
     const priorityFeeSol = simulateJitoFee({ urgency, liquidity: liq });
-    const latencyMs = simulateLatencyMs({ liquidity: liq, urgency });
+    const latencyMs = simulateLatencyMs({ liquidity: liq, urgency, lane });
 
     if (this.jupiterQuote) {
       try {
@@ -130,10 +137,11 @@ class PaperAdapter extends TradeAdapter {
       amountUsd: notional,
       side: 'sell',
       base: opts.baseSlippage != null ? opts.baseSlippage : this.fallbackSlippage,
+      lane: opts.lane || null,
     });
     const urgency = opts.urgency || (opts.reason === 'whale' || opts.reason === 'stop' ? 'high' : 'normal');
     const priorityFeeSol = simulateJitoFee({ urgency, liquidity: liq });
-    const latencyMs = simulateLatencyMs({ liquidity: liq, urgency });
+    const latencyMs = simulateLatencyMs({ liquidity: liq, urgency, lane: opts.lane || null });
 
     if (this.jupiterQuote) {
       try {
