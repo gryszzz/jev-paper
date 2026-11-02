@@ -166,7 +166,7 @@
     risk: { name: 'Risk', short: 'RISK', color: '#ff9f0a', role: 'Stops, trail, streak cooldown, sweep.' },
     whale: { name: 'Whale Watch', short: 'WHALE', color: '#22d3ee', role: 'Tracks top holders + smart buys.' },
   };
-  const AGENT_ORDER = ['scanner', 'analyst', 'executor', 'risk', 'whale'];
+  const AGENT_ORDER = ['scanner', 'analyst', 'risk', 'executor', 'whale'];
 
   /** Crisp original pixel/voxel-style bots (not xAI/Grok). */
   function pixelBot(key, color) {
