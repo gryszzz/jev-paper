@@ -1,6 +1,7 @@
 'use strict';
 
 const { loadState, saveState } = require('./store');
+const tradedLedger = require('./tradedLedger');
 const { fetchJson, isBackingOff } = require('./http');
 const { createTradeAdapter } = require('./adapters');
 const { jupiterQuote, jupiterPrice } = require('./jupiter');
@@ -139,6 +140,10 @@ function short(a) {
 /** Per-mint re-entry gate: blacklist after stop, cooldown after any exit. */
 function mintBlocked(state, mint, { allowScalpReclaim = false } = {}) {
   if (!mint) return { blocked: true, why: 'no-mint' };
+  // Persistent 24h ledger survives resets + redeploys
+  if (tradedLedger.recentlyTraded(mint) && !allowScalpReclaim) {
+    return { blocked: true, why: 'ledger-24h', until: tradedLedger.lastTradeTs(mint) + tradedLedger.TRADE_BLOCK_MS };
+  }
   const bl = state.mintBlacklist && state.mintBlacklist[mint];
   if (bl) return { blocked: true, why: 'stop-blacklist', stopLoss: true };
   const cd = state.mintCooldown && state.mintCooldown[mint];
@@ -153,6 +158,7 @@ function mintBlocked(state, mint, { allowScalpReclaim = false } = {}) {
 
 function recordMintExit(state, pos, reason) {
   if (!pos || !pos.mint) return;
+  try { tradedLedger.recordExit(pos.mint, { symbol: pos.symbol, reason }); } catch (_) {}
   state.mintCooldown = state.mintCooldown || {};
   state.mintBlacklist = state.mintBlacklist || {};
   const settings = state.settings || {};
@@ -630,10 +636,24 @@ class PaperEngine {
     this.state.liveEnabled = false;
     ensureWeights(this.state);
     ensureRegistry(this.state);
+    await tradedLedger.load();
+    // One-shot backfill: any mint already in seenMints / open / recent activity counts as traded
+    try {
+      const seed = new Set(this.state.seenMints || []);
+      for (const p of this.state.positions || []) if (p && p.mint) seed.add(p.mint);
+      for (const a of this.state.activity || []) {
+        if (a && a.mint && (a.type === 'buy' || a.type === 'stopped' || a.type === 'tp' || a.type === 'time')) seed.add(a.mint);
+      }
+      for (const m of seed) {
+        if (!tradedLedger.everTraded(m)) tradedLedger.recordBuy(m, { symbol: '', lane: null });
+      }
+    } catch (_) {}
+    tradedLedger.hydrateStateGates(this.state);
     if (process.env.LIVE_ENABLED === 'true') {
       console.warn('[jev] LIVE_ENABLED=true ignored — paper only until LiveAdapter is completed');
     }
     saveState(this.state, { immediate: true });
+    try { await tradedLedger.flush(true); } catch (_) {}
     return this.state;
   }
 
@@ -702,6 +722,7 @@ class PaperEngine {
       dayRealizedPnl: round(s.dayRealizedPnl || 0, 4),
       cooldownUntil: s.cooldownUntil || 0,
       mintCooldownActive: Object.values(s.mintCooldown || {}).filter((c) => c && now() < (c.until || 0)).length,
+      tradedLedger: tradedLedger.stats(),
       mintBlacklistCount: Object.keys(s.mintBlacklist || {}).length,
       presets: Object.keys(PRESETS).map((id) => ({ id, label: PRESETS[id].label })),
       adapterMode: this.adapter.mode(),
@@ -1039,7 +1060,10 @@ class PaperEngine {
     const start = Number.isFinite(bal) && bal > 0 ? bal : this.state.startingBalance || 100;
     const strategyId = this.state.settings.strategyId;
     this.state = emptyState({ ...this.state.settings, startingBalance: start, strategyId });
+    // Ledger survives reset — re-apply 24h blocks so we never rebuy the same coins
+    tradedLedger.hydrateStateGates(this.state);
     this.persist(true);
+    try { tradedLedger.flush(true); } catch (_) {}
     this.emit();
     return this.snapshot();
   }
@@ -1475,6 +1499,17 @@ class PaperEngine {
         r.pass = r.score >= (settings.minScore || 70);
         scored.push({ ...p, ...r, narratives: p.narratives || r.narratives || tagCoin(p), features: feat });
       }
+      // Stale-on-board penalty: mints sitting on scored >60m get crushed
+      for (const p of scored) {
+        try {
+          tradedLedger.noteScored(p.mint);
+          if (tradedLedger.isStaleOnBoard(p.mint)) {
+            p.score = (p.score || 0) - 18;
+            p.staleOnBoard = true;
+            (p.breakdown || (p.breakdown = [])).push({ k: 'staleBoard', v: -18, note: '>60m on board' });
+          }
+        } catch (_) {}
+      }
       scored.sort((a, b) => b.score - a.score);
       state.scored = scored.slice(0, 15);
       state.agents.analyst.scored = (state.agents.analyst.scored || 0) + scored.length;
@@ -1525,17 +1560,35 @@ class PaperEngine {
         }
         return true;
       });
-      // Prefer never-traded FRESH/GRAD; novelty + lane priority over raw score ties
+      // Prefer never-traded FRESH; novelty + reserved FRESH slots over stale grads
       candidates.sort((a, b) => {
-        const novelA = state.seenMints.includes(a.mint) ? 0 : 1;
-        const novelB = state.seenMints.includes(b.mint) ? 0 : 1;
-        if (settings.preferNovelMints !== false && novelA !== novelB) return novelB - novelA;
+        const tradedA = tradedLedger.everTraded(a.mint) || state.seenMints.includes(a.mint) ? 1 : 0;
+        const tradedB = tradedLedger.everTraded(b.mint) || state.seenMints.includes(b.mint) ? 1 : 0;
+        if (settings.preferNovelMints !== false && tradedA !== tradedB) return tradedA - tradedB;
+        const freshA = (a.lane === LANE.FRESH || a.source === 'pumpportal' || a.fromPump) ? 1 : 0;
+        const freshB = (b.lane === LANE.FRESH || b.source === 'pumpportal' || b.fromPump) ? 1 : 0;
+        if (freshA !== freshB) return freshB - freshA;
         if (settings.preferEarlyLanes !== false) {
           const dp = lanePriority(b.lane) - lanePriority(a.lane);
-          if (dp && Math.abs((b.score || 0) - (a.score || 0)) < 14) return dp;
+          if (dp) return dp;
         }
+        const staleA = a.staleOnBoard ? 1 : 0;
+        const staleB = b.staleOnBoard ? 1 : 0;
+        if (staleA !== staleB) return staleA - staleB;
         return (b.score || 0) - (a.score || 0);
       });
+      // Hard reserve: if any FRESH/new-pool candidate passes, pick it before GRAD/MOVER
+      // when we have fewer than freshReserve open FRESH positions.
+      const freshOpen = state.positions.filter((x) => (x.lane || '') === LANE.FRESH).length;
+      const freshReserve = Math.max(1, Math.min(2, settings.maxPositions || 3));
+      if (freshOpen < freshReserve) {
+        const freshFirst = candidates.filter((p) => p.lane === LANE.FRESH || p.source === 'pumpportal' || p.fromPump);
+        const rest = candidates.filter((p) => !(p.lane === LANE.FRESH || p.source === 'pumpportal' || p.fromPump));
+        if (freshFirst.length) {
+          candidates.length = 0;
+          candidates.push(...freshFirst, ...rest);
+        }
+      }
 
       // loss-streak cooldown already handled above; also block if streak cooldown
       if (state.stats.lossStreak >= (settings.lossStreakLimit || 3) && state.cooldownUntil > now()) {
@@ -1657,7 +1710,7 @@ class PaperEngine {
     const isReclaim = !!(pair.breakdown || []).some((b) => b && b.k === 'reentry');
     const block = mintBlocked(state, pair.mint, { allowScalpReclaim: isReclaim });
     if (block.blocked) return null;
-    if (!isReclaim && state.seenMints.includes(pair.mint)) return null;
+    if (!isReclaim && (state.seenMints.includes(pair.mint) || tradedLedger.recentlyTraded(pair.mint))) return null;
 
     const narrExp = exposureByNarrative(state.positions);
     const tags = pair.narratives || tagCoin(pair);
@@ -1872,6 +1925,7 @@ class PaperEngine {
     state.positions.push(pos);
     state.seenMints.push(pair.mint);
     if (state.seenMints.length > 500) state.seenMints = state.seenMints.slice(-500);
+    try { tradedLedger.recordBuy(pair.mint, { symbol: pair.symbol, lane }); } catch (_) {}
 
     state.agents.executor.trades = (state.agents.executor.trades || 0) + 1;
     state.agents.executor.status = 'filled';

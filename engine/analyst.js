@@ -179,17 +179,29 @@ async function scorePair(pair, settings, ctx = {}) {
     breakdown.push({ k: 'mcapCap', v: -6, note: 'approaching cap' });
   }
 
-  // Novelty: never-before-traded new pairs get a bonus; repeat/old MOVER get hit
-  const seen = (ctx.state && Array.isArray(ctx.state.seenMints) && ctx.state.seenMints.includes(pair.mint));
-  if (!seen && (lane === LANE.FRESH || lane === LANE.GRAD)) {
-    score += 8;
-    breakdown.push({ k: 'novelty', v: 8, note: 'never-traded launch' });
-  } else if (!seen && lane === LANE.MOVER && ageH < 6) {
-    score += 3;
-    breakdown.push({ k: 'novelty', v: 3, note: 'young mover' });
+  // Novelty: strong bonus for never-seen mints; hard penalty if ledger/seen; stale-board hit
+  let tradedLedgerRef = null;
+  try { tradedLedgerRef = require('./tradedLedger'); } catch (_) {}
+  const seenMem = (ctx.state && Array.isArray(ctx.state.seenMints) && ctx.state.seenMints.includes(pair.mint));
+  const seenLedger = tradedLedgerRef ? tradedLedgerRef.everTraded(pair.mint) : false;
+  const seen = seenMem || seenLedger;
+  const neverSeen = !seen;
+  if (neverSeen && (lane === LANE.FRESH || pair.source === 'pumpportal' || pair.fromPump)) {
+    score += 22;
+    breakdown.push({ k: 'novelty', v: 22, note: 'brand-new FRESH launch' });
+  } else if (neverSeen && lane === LANE.GRAD) {
+    score += 14;
+    breakdown.push({ k: 'novelty', v: 14, note: 'never-traded grad' });
+  } else if (neverSeen && lane === LANE.MOVER && ageH < 6) {
+    score += 5;
+    breakdown.push({ k: 'novelty', v: 5, note: 'young mover' });
   } else if (seen) {
-    score -= 20;
-    breakdown.push({ k: 'novelty', v: -20, note: 'already traded' });
+    score -= 28;
+    breakdown.push({ k: 'novelty', v: -28, note: 'already traded (ledger)' });
+  }
+  if (tradedLedgerRef && tradedLedgerRef.isStaleOnBoard(pair.mint)) {
+    score -= 16;
+    breakdown.push({ k: 'staleBoard', v: -16, note: '>60m on scored board' });
   }
   if (lane === LANE.MOVER && ageH > 48) {
     score -= 15;
