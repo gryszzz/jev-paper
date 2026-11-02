@@ -2,6 +2,18 @@
 
 const cache = new Map();
 const backoffUntil = new Map();
+const hostBackoffUntil = new Map();
+
+function hostOf(url) {
+  try { return new URL(url).host; } catch (_) { return 'unknown'; }
+}
+
+function isBackingOff(key, url) {
+  const now = Date.now();
+  if ((backoffUntil.get(key) || 0) > now) return true;
+  if (url && (hostBackoffUntil.get(hostOf(url)) || 0) > now) return true;
+  return false;
+}
 
 async function fetchJson(url, opts = {}) {
   const {
@@ -13,11 +25,15 @@ async function fetchJson(url, opts = {}) {
     body,
   } = opts;
 
-  const until = backoffUntil.get(key) || 0;
-  if (Date.now() < until) {
+  const now = Date.now();
+  const host = hostOf(url);
+  const until = Math.max(backoffUntil.get(key) || 0, hostBackoffUntil.get(host) || 0);
+  if (now < until) {
     const hit = cache.get(key);
     if (hit) return hit.data;
-    throw new Error(`backoff ${key}`);
+    const err = new Error(`backoff ${key}`);
+    err.code = 'BACKOFF';
+    throw err;
   }
 
   if (method === 'GET' && ttlMs > 0) {
@@ -39,9 +55,14 @@ async function fetchJson(url, opts = {}) {
       body,
     });
     if (res.status === 429 || res.status >= 500) {
-      const cool = String(key).startsWith('ds-tok') || String(key).startsWith('ds-') ? 60000 : 25000;
+      const cool = /dexscreener/i.test(host) ? 90000 : 30000;
       backoffUntil.set(key, Date.now() + cool);
-      throw new Error(`HTTP ${res.status}`);
+      if (res.status === 429 && /dexscreener/i.test(host)) {
+        hostBackoffUntil.set(host, Date.now() + 45000);
+      }
+      const err = new Error(`HTTP ${res.status}`);
+      err.code = res.status === 429 ? 'RATE_LIMIT' : 'HTTP_ERR';
+      throw err;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
     const data = await res.json();
@@ -52,4 +73,4 @@ async function fetchJson(url, opts = {}) {
   }
 }
 
-module.exports = { fetchJson };
+module.exports = { fetchJson, isBackingOff };

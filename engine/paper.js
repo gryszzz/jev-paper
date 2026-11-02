@@ -1,9 +1,9 @@
 'use strict';
 
 const { loadState, saveState } = require('./store');
-const { fetchJson } = require('./http');
+const { fetchJson, isBackingOff } = require('./http');
 const { createTradeAdapter } = require('./adapters');
-const { jupiterQuote } = require('./jupiter');
+const { jupiterQuote, jupiterPrice } = require('./jupiter');
 const {
   pumpNewTokens,
   pumpGraduating,
@@ -96,7 +96,7 @@ const DEFAULTS = {
   whaleDropPct: 15,
   whalePollMs: 45000,
   scanIntervalMs: 22000,
-  priceIntervalMs: 8000,
+  priceIntervalMs: 12000,
   lossStreakLimit: 3,
   lossStreakCooldownMs: 12 * 60e3,
   maxNarrativePct: 0.5,
@@ -1064,11 +1064,14 @@ class PaperEngine {
         // gentle pacing between chunks
         if (i + chunk < mints.length) await new Promise((r) => setTimeout(r, 350));
       } catch (e) {
+        if (e && (e.code === 'BACKOFF' || e.code === 'RATE_LIMIT')) {
+          break; // silent — host cooling
+        }
         if (!warned) {
           warned = true;
           console.warn('tokens batch', e.message);
         }
-        if (/429|backoff/i.test(String(e.message))) break; // stop hammering
+        if (/429|backoff/i.test(String(e.message))) break;
       }
     }
     return out;
@@ -1858,14 +1861,39 @@ class PaperEngine {
     }
 
     const mints = [...new Set(state.positions.map((p) => p.mint).concat(watchMints))];
-    let pairs = [];
+    const byMint = new Map();
+    // Prefer Jupiter price API (lighter) — avoid DexScreener spam on every price tick
     try {
-      pairs = await this.fetchPairsForMints(mints);
-    } catch (e) {
-      console.warn('price tick', e.message);
-      return;
+      const jp = await jupiterPrice(mints);
+      for (const mint of mints) {
+        const row = jp && jp[mint];
+        const px = row && (row.usdPrice || row.price || row.usd || (row.data && row.data.price));
+        if (px) {
+          const prev = state.positions.find((p) => p.mint === mint) || {};
+          byMint.set(mint, {
+            mint,
+            priceUsd: Number(px),
+            liquidity: prev.liquidity,
+            marketCap: prev.marketCap,
+            volumeH24: prev.volumeH24,
+            icon: prev.icon,
+            symbol: prev.symbol,
+          });
+        }
+      }
+    } catch (_) {}
+    // Dex only if Jupiter miss and not backing off
+    const missing = mints.filter((m) => !byMint.has(m));
+    if (missing.length && !isBackingOff(`ds-tok-${missing[0]}-${missing.length}`, DS + '/')) {
+      try {
+        const pairs = await this.fetchPairsForMints(missing);
+        for (const p of pairs) byMint.set(p.mint, p);
+      } catch (e) {
+        if (!(e && (e.code === 'BACKOFF' || e.code === 'RATE_LIMIT'))) {
+          console.warn('price tick', e.message);
+        }
+      }
     }
-    const byMint = new Map(pairs.map((p) => [p.mint, p]));
     const settings = state.settings;
     const closes = []; // { pos, reason, label, sellPct }
 
@@ -2433,8 +2461,8 @@ class PaperEngine {
           }
         } catch (e) {
           if (e && e.code === 'RPC_COOLDOWN') {
-            // silent — global cooldown already logged once/min
-          } else if (!/429|cooldown|rate/i.test(String(e && e.message))) {
+            // silent
+          } else if (!/429|cooldown|rate|rpc error|exhausted/i.test(String(e && e.message))) {
             console.warn('whale', pos.symbol, e.message);
           }
         }
