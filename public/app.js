@@ -4,6 +4,7 @@
   const $ = (id) => document.getElementById(id);
   let state = null;
   let deskTradeLimit = 30;
+  let jevFloor = null;
   let tf = '1D';
   let odoTarget = 0;
   let odoShown = 0;
@@ -342,22 +343,20 @@
     el.innerHTML = `<path d="${d}" stroke="${up ? color : '#ff453a'}"/>`;
   }
 
+  function ensureFloor() {
+    if (jevFloor) return jevFloor;
+    const c = $('floorCanvas');
+    if (!c || !window.JevFloor) return null;
+    jevFloor = window.JevFloor.createFloor(c);
+    if (jevFloor) jevFloor.start();
+    return jevFloor;
+  }
+
   function renderDesk() {
     if (!state) return;
     const agents = state.agents || {};
-    const active = pickActiveAgent(agents);
-
-    $('deskBots').innerHTML = AGENT_ORDER.map((key) => {
-      const a = agents[key] || {};
-      const meta = AGENT_META[key];
-      const speech = key === active ? agentSpeech(key, a) : '';
-      const isActive = key === active;
-      return `<div class="desk-bot${isActive ? ' active' : ''}" style="--bot-glow:${meta.color}" data-agent="${key}">
-        <div class="bot-wrap">${pixelBot(key, meta.color)}</div>
-        <div class="bot-name" style="color:${meta.color}">${meta.name}</div>
-        <div class="speech-slot">${speech ? `<div class="speech-pill">${speech}</div>` : ''}</div>
-      </div>`;
-    }).join('');
+    const floor = ensureFloor();
+    if (floor) floor.onState(state);
 
     $('deskStatus').innerHTML = AGENT_ORDER.map((key) => {
       const a = agents[key] || {};
