@@ -67,6 +67,7 @@ const { runnerBandAction } = require('./runnerScore');
 const learn = require('./learn');
 const eyes = require('./eyes');
 const viral = require('./viral');
+const catalyst = require('./catalyst');
 
 const DS = 'https://api.dexscreener.com';
 
@@ -733,6 +734,7 @@ class PaperEngine {
       smartWalletMiner: minerStats(s),
       xBuzz: xbuzz.stats(),
       viral: viral.stats(),
+      catalyst: catalyst.stats(),
       learn: learn.stats(this.state),
       eyes: eyes.status({
         learn: learn.stats(this.state),
@@ -798,6 +800,10 @@ class PaperEngine {
         viral.tickViral().catch((e) => console.error('viral', e.message));
       }, 180000);
       viral.tickViral().catch(() => {});
+      this._catalystTimer = setInterval(() => {
+        catalyst.tickCatalyst({ viralStats: viral.stats() }).catch((e) => console.error('catalyst', e.message));
+      }, 180000);
+      catalyst.tickCatalyst({ viralStats: viral.stats() }).catch(() => {});
     });
   }
 
@@ -808,7 +814,8 @@ class PaperEngine {
     if (this._minerTimer) clearInterval(this._minerTimer);
     if (this._learnTimer) clearInterval(this._learnTimer);
     if (this._viralTimer) clearInterval(this._viralTimer);
-    this._scanTimer = this._priceTimer = this._whaleTimer = this._minerTimer = this._learnTimer = this._viralTimer = null;
+    if (this._catalystTimer) clearInterval(this._catalystTimer);
+    this._scanTimer = this._priceTimer = this._whaleTimer = this._minerTimer = this._learnTimer = this._viralTimer = this._catalystTimer = null;
     try {
       if (this._tradeUnsub) this._tradeUnsub();
       feed.stop();
@@ -839,6 +846,20 @@ class PaperEngine {
     try {
       const tweets = xbuzz.recentTweets(45 * 60e3);
       viral.ingestXTrendKeywords(tweets.map((tw) => tw.text));
+      for (const tw of tweets) {
+        try {
+          catalyst.ingestPost({
+            id: tw.id,
+            text: tw.text,
+            user: tw.user || tw.author,
+            ts: tw.ts,
+            likes: tw.likes || tw.likeCount,
+            rts: tw.rts || tw.retweetCount,
+            replies: tw.replies || tw.replyCount,
+            source: 'xbuzz',
+          });
+        } catch (_) {}
+      }
     } catch (_) {}
     // refresh free RPC wallet watch with latest top wallets
     try {
@@ -1258,6 +1279,21 @@ class PaperEngine {
       // Boost smart-money entry mints
       for (const m of Object.keys(state._smartEntryMints || {})) mintSet.add(m);
 
+      // Full new-coin stream: realtime pump.fun creates + migrations into catalyst
+      try {
+        for (const L of (rt || [])) {
+          if (L && L.mint) {
+            mintSet.add(L.mint);
+            catalyst.ingestCoin({
+              mint: L.mint,
+              symbol: L.symbol,
+              name: L.name,
+              source: L.source || (L.graduating ? 'pumpportal.migration' : 'pumpportal.new'),
+              description: L.description,
+            });
+          }
+        }
+      } catch (_) {}
       // Priority: newest pumpportal / pump.fun / gecko pools first so FRESH isn't starved by stale DS movers
       const priority = [];
       const seenP = new Set();
@@ -1352,6 +1388,59 @@ class PaperEngine {
         p._eyesBoost = Math.round(eyesBoost);
       }
 
+      // Catalyst stream: ingest every new coin / pool / boost, then match + early traction
+      try {
+        for (const p of pumpNew || []) {
+          if (p && p.mint) catalyst.ingestCoin({ mint: p.mint, symbol: p.symbol, name: p.name, source: p.source || 'pump.fun', description: p.description });
+        }
+        for (const p of pumpGrad || []) {
+          if (p && p.mint) catalyst.ingestCoin({ mint: p.mint, symbol: p.symbol, name: p.name, source: p.source || 'pump.grad', description: p.description });
+        }
+        for (const g of gecko || []) {
+          if (g && g.mint) catalyst.ingestCoin({ mint: g.mint, symbol: g.symbol, name: g.name, source: g.source || g.dexId || 'gecko.new_pool' });
+        }
+        for (const row of dsTrend || []) {
+          const m = row && (row.mint || row.tokenAddress);
+          if (m) catalyst.ingestCoin({ mint: m, symbol: row.symbol, name: row.name, source: row.source || 'dexscreener' });
+        }
+        for (const row of geckoTrend || []) {
+          if (row && row.mint) catalyst.ingestCoin({ mint: row.mint, symbol: row.symbol, name: row.name, source: 'gecko.trending' });
+        }
+        for (const p of pairs) {
+          const src = p.source || (p.boosted ? 'dexscreener.boost' : p.dexId) || 'dex';
+          catalyst.ingestCoin({ mint: p.mint, symbol: p.symbol, name: p.name, source: src, description: p.description });
+          const et = catalyst.earlyTraction(p, { smartOverlap: p.whaleCluster || 0 });
+          p.earlyTraction = et.earlyTraction || 0;
+          p.earlyTractionNote = et.note;
+          const cm = catalyst.matchPair(p, { copycatPenalty: p.copycatPenalty || 0 });
+          p.catalyst = cm.catalyst || 0;
+          p.catalystNote = cm.note;
+          p.catalystKind = cm.kind;
+          p.catalystUser = cm.user;
+          p.catalystDirect = !!cm.directMention;
+          p.rugTight = !!cm.rugTight;
+          // Boost eyes for catalyst + early traction (rug-first still in analyst)
+          let cBoost = 0;
+          cBoost += Math.min(14, (p.catalyst || 0) * 0.45);
+          cBoost += Math.min(8, (p.earlyTraction || 0) * 0.4);
+          if (p.copycatPenalty >= 8 && p.catalyst > 0) cBoost -= 6; // copycat of famous name
+          p._eyesBoost = Math.round((p._eyesBoost || 0) + cBoost);
+          if (p.catalyst >= 12) {
+            p._catalystTag = true;
+            (p.breakdown || (p.breakdown = [])).push({ k: 'catalyst', v: Math.round(cBoost), note: p.catalystNote });
+          }
+        }
+        // Pull viral keyword spikes into catalyst dictionary
+        try {
+          const vs = viral.stats();
+          for (const m of (vs.top || []).slice(0, 12)) {
+            for (const kw of m.keywords || []) catalyst.ingestKeywordSpike(kw, { heat: m.heat || 0.5, source: m.source || 'viral' });
+          }
+        } catch (_) {}
+      } catch (e) {
+        console.warn('[jev] catalyst annotate', e.message);
+      }
+
       state.agents.scanner.pools = pairs.length;
       const laneExp = exposureByLane(state.positions);
       state.agents.scanner.laneExposure = laneExp;
@@ -1402,6 +1491,10 @@ class PaperEngine {
       state.heatMap = updateHeatMap(filtered.slice(0, 40));
       state.agents.scanner.status = rtStats.connected ? 'streaming' : 'idle';
       if (rt.length) state.agents.scanner.flash = 'pulse';
+      if (pairs.some((x) => (x.catalyst || 0) >= 12)) {
+        state.agents.scanner.flash = 'pulse';
+        state.agents.analyst.flash = 'pulse';
+      }
 
       if (!settings.running || state.killSwitch) {
         this.persist();
@@ -1497,6 +1590,22 @@ class PaperEngine {
           r.score = Math.max(0, Math.min(100, r.score + p._eyesBoost));
           r.breakdown = [...(r.breakdown || []), { k: 'eyes', v: p._eyesBoost, note: `v${p.viralMeme||0}/n${p.narrativeFit||0}/t${p.tweetToLaunch||0}/w${p.whaleCluster||0}/c-${p.copycatPenalty||0}` }];
         }
+        // Catalyst rug-tight: fail soft if mint still has authority when famous-name magnet
+        if (p.rugTight && r.rug && r.rug.ok && !r.rug.mintRenounced && (r.score || 0) < 90) {
+          r.score = Math.min(r.score || 0, 55);
+          r.pass = false;
+          r.breakdown = [...(r.breakdown || []), { k: 'catalystRug', v: -20, note: 'famous-name magnet · mint AUTH' }];
+        }
+        if (p.catalyst >= 10) {
+          const add = Math.min(12, Math.round(p.catalyst * 0.35));
+          r.score = Math.max(0, Math.min(100, (r.score || 0) + add));
+          r.breakdown = [...(r.breakdown || []), { k: 'catalyst', v: add, note: p.catalystNote || 'spike' }];
+        }
+        if (p.earlyTraction >= 6) {
+          const add = Math.min(8, Math.round(p.earlyTraction * 0.35));
+          r.score = Math.max(0, Math.min(100, (r.score || 0) + add));
+          r.breakdown = [...(r.breakdown || []), { k: 'earlyTraction', v: add, note: p.earlyTractionNote || 'traction' }];
+        }
         const feat = learn.extractFeatures(p, {
           xBuzzScore: xb.score,
           narrativeFit: p.narrativeFit,
@@ -1505,6 +1614,8 @@ class PaperEngine {
           copycatPenalty: p.copycatPenalty,
           whaleCluster: p.whaleCluster,
           viralMeme: p.viralMeme,
+          catalyst: p.catalyst,
+          earlyTraction: p.earlyTraction,
         });
         const lb = learn.learnedBonus(state, feat);
         if (lb) {
@@ -1635,6 +1746,9 @@ class PaperEngine {
               copycatPenalty: pick.copycatPenalty,
               whaleCluster: pick.whaleCluster,
               viralMeme: pick.viralMeme,
+              catalyst: pick.catalyst,
+              earlyTraction: pick.earlyTraction,
+              catalystNote: pick.catalystNote,
             },
           });
           // Log nearby skips for contrast
@@ -1968,7 +2082,10 @@ class PaperEngine {
       symbol: pair.symbol,
       icon: pair.icon,
       agent: 'Executor',
-      detail: `${lane} · ${modeTag} · ${arm.id} · R${rScore} · ${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'}`,
+      detail: `${lane} · ${modeTag} · ${arm.id} · R${rScore} · ${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'}${pair.catalyst >= 10 ? ' · CATALYST' : ''}${pair.earlyTraction >= 8 ? ' · TRACTION' : ''}`,
+      catalyst: pair.catalyst || 0,
+      catalystNote: pair.catalystNote || null,
+      earlyTraction: pair.earlyTraction || 0,
       amountUsd: spend,
       pnl: null,
       pnlPct: null,

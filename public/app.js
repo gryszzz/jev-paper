@@ -516,6 +516,9 @@
         const agent = (it.agent || 'EXEC').replace(/^Risk.*/, 'Risk').replace(/^Whale.*/, 'Whale');
         const size = it.amountUsd != null ? money(it.amountUsd, 0) : '';
         const lane = (it.lane || '').toUpperCase();
+        const catBadge = (it.catalyst >= 10 || /CATALYST/i.test(it.detail || ''))
+          ? '<span class="tr-lane lane-catalyst" title="' + (it.catalystNote || 'catalyst') + '">CATALYST</span>'
+          : '';
         const laneBadge = lane
           ? `<span class="tr-lane lane-${lane.toLowerCase()}">${lane}</span>`
           : '';
@@ -528,7 +531,7 @@
         return `<div class="trade-row" data-mint="${it.mint || ''}">
           <img src="${img}" alt="" onerror="this.src='${iconFallback(it.symbol)}'"/>
           <div class="tr-mid">
-            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'} ${laneBadge}${modeBadge}${arm}${rScore}<span class="tr-meta-inline">${[ago(it.ts), size].filter(Boolean).join(' · ')}</span></div>
+            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'} ${laneBadge}${catBadge}${modeBadge}${arm}${rScore}<span class="tr-meta-inline">${[ago(it.ts), size].filter(Boolean).join(' · ')}</span></div>
           </div>
           ${right}
         </div>`;

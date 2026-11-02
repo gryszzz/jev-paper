@@ -394,6 +394,7 @@ body { min-height: 100dvh; }
 }
 .lane-fresh { background: rgba(0,255,102,0.18); color: #00FF66; }
 .lane-grad { background: rgba(167,139,250,0.22); color: #c4b5fd; }
+.lane-catalyst{background:rgba(255,180,40,.22);color:#ffb428;border:1px solid rgba(255,180,40,.35)}
 .lane-mover { background: rgba(56,189,248,0.16); color: #38bdf8; }
 
 .trade-more {

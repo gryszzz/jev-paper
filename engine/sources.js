@@ -162,11 +162,19 @@ async function geckoNewPools() {
     });
     const rows = (d.data || []).map((row) => {
       const a = row.attributes || {};
+      const dex = String(a.dex_id || a.name || a.pool_name || '').toLowerCase();
+      let source = 'gecko.new_pool';
+      if (/pump/.test(dex)) source = 'pumpswap';
+      else if (/raydium/.test(dex)) source = 'raydium';
+      else if (/meteora/.test(dex)) source = 'meteora';
+      else if (/orca/.test(dex)) source = 'orca';
       return {
         mint: (a.base_token_address || a.address || '').split('_').pop(),
         symbol: a.name || a.pool_name,
+        name: a.name || a.pool_name,
         liquidity: Number(a.reserve_in_usd || 0),
-        source: 'geckoterminal',
+        dexId: a.dex_id || null,
+        source,
       };
     });
     return rows.filter((r) => r.mint && r.mint.length > 20);

@@ -28,6 +28,7 @@ const FEATURE_KEYS = [
   'kol', 'deployer', 'narrative', 'structure', 'xBuzz',
   'narrativeFit', 'firstMover', 'tweetToLaunch', 'copycatPenalty',
   'whaleCluster', 'viralMeme', 'boosted', 'liqLog', 'ageMin',
+  'catalyst', 'earlyTraction',
 ];
 
 function ensureDir() {
@@ -91,6 +92,8 @@ function extractFeatures(pair = {}, ctx = {}) {
     boosted: pair.boosted ? 1 : 0,
     liqLog: Math.log10(Math.max(1, Number(pair.liquidity) || 1)),
     ageMin: Math.min(1440, (Number(pair.ageMs) || 0) / 60000),
+    catalyst: Number(ctx.catalyst || pair.catalyst || 0),
+    earlyTraction: Number(ctx.earlyTraction || pair.earlyTraction || 0),
   };
 }
 

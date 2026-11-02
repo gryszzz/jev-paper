@@ -9,6 +9,7 @@ const { jupiterPrice } = require('./jupiter');
 const { realtimeStats } = require('./sources');
 const xbuzz = require('./xbuzz');
 const viral = require('./viral');
+const catalyst = require('./catalyst');
 
 function normalizeTicker(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -143,6 +144,7 @@ function status(extra = {}) {
     pumpportal: realtimeStats(),
     xBuzz: xbuzz.stats(),
     viral: viral.stats(),
+    catalyst: catalyst.stats(),
     jupiter: extra.jupiter || null,
     dexscreener: extra.dexscreener || null,
     gecko: extra.gecko || null,
