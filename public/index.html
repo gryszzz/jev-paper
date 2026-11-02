@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="description" content="JEV — Solana memecoin paper-trading agents. No real money." />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <title>JEV Paper</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="top-banner" id="banner">
+      <img id="bannerIcon" class="banner-icon hide" alt="" />
+      <span id="bannerText">JEV · paper mode</span>
+    </header>
+
+    <main id="view-home" class="view active">
+      <section class="balance-block">
+        <div class="balance-row">
+          <div id="balance" class="odometer">$0.00</div>
+          <button id="runToggle" class="run-toggle" type="button" aria-pressed="true">
+            <span class="dot"></span><span class="run-label">Live</span>
+          </button>
+        </div>
+        <div class="gain-row">
+          <span id="gainLine" class="gain-line">+$0.00 (0%)</span>
+          <span id="multPill" class="mult-pill">1.00x</span>
+        </div>
+      </section>
+
+      <section class="chart-card">
+        <canvas id="equityChart" width="720" height="280"></canvas>
+        <div class="chart-meta" id="chartMeta"></div>
+        <div class="tf-row" id="tfRow">
+          <button class="tf active live" data-tf="LIVE"><span class="blink"></span>LIVE</button>
+          <button class="tf" data-tf="1H">1H</button>
+          <button class="tf" data-tf="4H">4H</button>
+          <button class="tf" data-tf="1D">1D</button>
+          <button class="tf" data-tf="1W">1W</button>
+          <button class="tf" data-tf="ALL">ALL</button>
+        </div>
+      </section>
+
+      <section class="section-head">
+        <h2>Agents</h2>
+        <span class="pill-green" id="agentsRunning">4 running</span>
+      </section>
+      <div class="agents-carousel" id="agentsCarousel"></div>
+
+      <section class="section-head">
+        <h2>Activity</h2>
+        <button class="link-green" id="seeAllActivity" type="button">See all</button>
+      </section>
+      <div class="activity-list" id="activityHome"></div>
+
+      <p class="disclaimer" id="disclaimer"></p>
+    </main>
+
+    <main id="view-agents" class="view">
+      <h1 class="page-title">Agents</h1>
+      <div id="agentsFull" class="agents-full"></div>
+    </main>
+
+    <main id="view-activity" class="view">
+      <h1 class="page-title">Activity</h1>
+      <div class="activity-list" id="activityFull"></div>
+    </main>
+
+    <main id="view-account" class="view">
+      <h1 class="page-title">Account</h1>
+      <div class="account-card">
+        <div class="acct-row"><span>Mode</span><strong class="green">PAPER ONLY</strong></div>
+        <div class="acct-row"><span>Cash</span><strong id="acctCash">$0</strong></div>
+        <div class="acct-row"><span>Equity</span><strong id="acctEquity">$0</strong></div>
+        <div class="acct-row"><span>Peak</span><strong id="acctPeak">$0</strong></div>
+        <div class="acct-row"><span>Open positions</span><strong id="acctPos">0</strong></div>
+      </div>
+      <label class="field">
+        <span>Starting balance (next reset)</span>
+        <input id="startBal" type="number" min="10" step="1" value="100" />
+      </label>
+      <label class="field">
+        <span>Slippage + fee haircut</span>
+        <input id="slippage" type="number" min="0" max="0.1" step="0.005" value="0.02" />
+      </label>
+      <label class="field">
+        <span>Min liquidity ($)</span>
+        <input id="minLiq" type="number" min="1000" step="1000" value="38000" />
+      </label>
+      <label class="field">
+        <span>Min analyst score</span>
+        <input id="minScore" type="number" min="1" max="100" step="1" value="70" />
+      </label>
+      <div class="btn-row">
+        <button class="btn-purple" id="saveSettings" type="button">Save settings</button>
+        <button class="btn-danger" id="resetBtn" type="button">Reset paper wallet</button>
+      </div>
+      <p class="disclaimer">No wallet keys. No real Solana transactions. DexScreener public data only. Install from your browser Share → Add to Home Screen.</p>
+    </main>
+
+    <div id="coinSheet" class="sheet" aria-hidden="true">
+      <div class="sheet-panel">
+        <button class="sheet-close" id="sheetClose" type="button">✕</button>
+        <div class="coin-head">
+          <img id="coinIcon" class="coin-icon-lg" alt="" />
+          <div>
+            <div id="coinTitle" class="coin-title">—</div>
+            <div id="coinSub" class="coin-sub">—</div>
+          </div>
+        </div>
+        <div id="coinPrice" class="coin-price">$0</div>
+        <div id="coinSince" class="coin-since">—</div>
+        <canvas id="coinChart" width="720" height="320"></canvas>
+        <div class="stats-grid" id="coinStats"></div>
+        <div class="pos-card" id="posCard"></div>
+        <div class="risk-card" id="riskCard"></div>
+      </div>
+    </div>
+
+    <div id="confetti" class="confetti-layer" hidden></div>
+
+    <nav class="bottom-nav" id="bottomNav">
+      <button data-tab="home" class="nav-btn active" type="button">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5z"/></svg>
+        <span>Home</span>
+      </button>
+      <button data-tab="agents" class="nav-btn" type="button">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3.5 19c.8-3 2.8-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><path d="M14 19c.4-2 1.6-3.2 3.5-3.2 1.4 0 2.5.7 3 2"/></svg>
+        <span>Agents</span>
+      </button>
+      <button data-tab="activity" class="nav-btn" type="button">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2-5 3 10 2-5h8"/></svg>
+        <span>Activity</span>
+      </button>
+      <button data-tab="account" class="nav-btn" type="button">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 19c1.2-3.2 3.5-5 7-5s5.8 1.8 7 5"/></svg>
+        <span>Account</span>
+      </button>
+    </nav>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
