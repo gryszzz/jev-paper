@@ -3,7 +3,7 @@
 
   const $ = (id) => document.getElementById(id);
   let state = null;
-  let tf = 'LIVE';
+  let tf = '1D';
   let odoTarget = 0;
   let odoShown = 0;
   let odoRaf = 0;
@@ -137,8 +137,8 @@
     const X = (t) => pad + ((t - minX) / Math.max(1, maxX - minX)) * (w - pad * 2);
     const Y = (v) => h - pad - ((v - minY) / Math.max(1e-9, maxY - minY)) * (h - pad * 2);
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, 'rgba(57,255,140,0.28)');
-    grad.addColorStop(1, 'rgba(57,255,140,0)');
+    grad.addColorStop(0, 'rgba(0,255,102,0.28)');
+    grad.addColorStop(1, 'rgba(0,255,102,0)');
     ctx.beginPath();
     pts.forEach((p, i) => {
       const x = X(p.t);
@@ -146,7 +146,7 @@
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
-    ctx.strokeStyle = '#39ff8c';
+    ctx.strokeStyle = '#00FF66';
     ctx.lineWidth = 2;
     ctx.stroke();
     const last = pts[pts.length - 1];
@@ -158,72 +158,250 @@
   }
 
   const AGENT_META = {
-    scanner: { name: 'Scanner', color: '#5b8cff' },
-    analyst: { name: 'Analyst', color: '#a78bfa' },
-    executor: { name: 'Executor', color: '#39ff8c' },
-    risk: { name: 'Risk', color: '#ff9f0a' },
-    whale: { name: 'Whale', color: '#22d3ee' },
+    scanner: { name: 'Scanner', short: 'SCAN', color: '#5b8cff', role: 'Radar on new Pump + DEX launches.' },
+    analyst: { name: 'Analyst', short: 'ANAL', color: '#a78bfa', role: 'Scores liquidity, age, smart money.' },
+    executor: { name: 'Executor', short: 'EXEC', color: '#00FF66', role: 'Paper fills with Jito/slip sim.' },
+    risk: { name: 'Risk', short: 'RISK', color: '#ff9f0a', role: 'Stops, trail, streak cooldown, sweep.' },
+    whale: { name: 'Whale Watch', short: 'WHALE', color: '#22d3ee', role: 'Tracks top holders + smart buys.' },
   };
+  const AGENT_ORDER = ['scanner', 'analyst', 'executor', 'risk', 'whale'];
 
-  /** Distinct original character art (not xAI/Grok trademark). */
-  function agentSvg(key, a, meta) {
-    const c = meta.color;
+  /** Crisp original pixel/voxel-style bots (not xAI/Grok). */
+  function pixelBot(key, color) {
+    const c = color;
+    const body = `
+      <rect x="10" y="14" width="12" height="10" fill="#12121a" stroke="${c}" stroke-width="1"/>
+      <rect x="11" y="8" width="10" height="8" fill="#16161f" stroke="${c}" stroke-width="1"/>
+      <rect class="blink-eye" x="13" y="11" width="2" height="2" fill="${c}"/>
+      <rect class="blink-eye" x="17" y="11" width="2" height="2" fill="${c}" style="animation-delay:.15s"/>
+      <rect x="12" y="24" width="3" height="4" fill="${c}" opacity=".85"/>
+      <rect x="17" y="24" width="3" height="4" fill="${c}" opacity=".85"/>
+      <rect x="7" y="16" width="3" height="2" fill="${c}" opacity=".7"/>
+      <rect x="22" y="16" width="3" height="2" fill="${c}" opacity=".7"/>`;
     if (key === 'scanner') {
-      return `<svg class="bot bot-scanner" viewBox="0 0 32 32" aria-hidden="true">
-        <circle cx="16" cy="16" r="11" fill="none" stroke="${c}" stroke-width="1.2" opacity=".35"/>
-        <circle cx="16" cy="16" r="7" fill="none" stroke="${c}" stroke-width="1" opacity=".25"/>
-        <path class="av-sweep" d="M16 16 L16 5 A11 11 0 0 1 26.5 20 Z" fill="${c}" opacity=".28"/>
-        <circle cx="16" cy="16" r="2.2" fill="${c}"/>
-        <circle class="av-blip" cx="23" cy="9" r="2" fill="${c}" opacity="0"/>
-        <circle class="av-blip" cx="10" cy="22" r="1.5" fill="#39ff8c" opacity="0" style="animation-delay:.35s"/>
+      return `<svg class="pixel-bot" viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">${body}
+        <rect x="14" y="3" width="4" height="3" fill="${c}"/>
+        <rect x="15" y="1" width="2" height="2" fill="${c}"/>
+        <path d="M16 4 Q24 2 26 8" fill="none" stroke="${c}" stroke-width="1.5"/>
+        <rect x="24" y="7" width="3" height="3" fill="${c}" opacity=".9"/>
       </svg>`;
     }
     if (key === 'analyst') {
-      const score = Math.max(0, Math.min(100, Number(a.score) || 0));
-      const circ = 2 * Math.PI * 9;
-      const off = circ * (1 - score / 100);
-      return `<svg class="bot bot-analyst" viewBox="0 0 32 32" aria-hidden="true">
-        <circle cx="16" cy="16" r="11" fill="#12121a" stroke="${c}" stroke-width="1.2" opacity=".5"/>
-        <circle class="av-gauge" cx="16" cy="16" r="9" fill="none" stroke="${c}" stroke-width="2.4"
-          stroke-dasharray="${circ.toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}"
-          stroke-linecap="round" transform="rotate(-90 16 16)"/>
-        <rect class="av-scan" x="8" y="14" width="16" height="1.4" fill="${c}" opacity=".7"/>
-        <text class="av-think" x="16" y="18.5" text-anchor="middle" fill="#fff" font-size="8" font-weight="700" font-family="Inter,system-ui,sans-serif">${score || '—'}</text>
+      return `<svg class="pixel-bot" viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">${body}
+        <rect x="12" y="10" width="8" height="1" fill="${c}"/>
+        <rect x="12" y="10" width="1" height="3" fill="${c}"/>
+        <rect x="19" y="10" width="1" height="3" fill="${c}"/>
+        <rect x="23" y="18" width="2" height="6" fill="${c}" opacity=".85"/>
+        <rect x="25" y="20" width="2" height="4" fill="${c}" opacity=".7"/>
+        <rect x="27" y="16" width="2" height="8" fill="${c}"/>
       </svg>`;
     }
     if (key === 'executor') {
-      return `<svg class="bot bot-executor" viewBox="0 0 32 32" aria-hidden="true">
-        <rect x="5" y="10" width="14" height="12" rx="3" fill="#12121a" stroke="${c}" stroke-width="1.4"/>
-        <path class="av-bolt" d="M20 6 L15 16 H19 L14 26 L24 14 H19 Z" fill="${c}" opacity=".9"/>
-        <g class="av-ticket" opacity="0">
-          <rect x="18" y="18" width="10" height="7" rx="1.5" fill="#1a1a24" stroke="${c}" stroke-width="1"/>
-          <path d="M20 20.5h6M20 22.5h4" stroke="${c}" stroke-width="1" opacity=".8"/>
-        </g>
+      return `<svg class="pixel-bot" viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">${body}
+        <path d="M22 6 L18 14 H21 L17 22 L25 12 H21 Z" fill="${c}"/>
+        <rect x="21" y="5" width="2" height="2" fill="#fff" opacity=".5"/>
       </svg>`;
     }
     if (key === 'risk') {
-      const la = a.lastAction;
-      const mood = la && la.pnl != null ? (la.pnl >= 0 ? 'ok' : 'block') : 'idle';
-      const fill = mood === 'block' ? 'rgba(255,69,58,0.25)' : mood === 'ok' ? 'rgba(57,255,140,0.2)' : 'rgba(255,159,10,0.15)';
-      const stroke = mood === 'block' ? '#ff453a' : mood === 'ok' ? '#39ff8c' : c;
-      return `<svg class="bot bot-risk" viewBox="0 0 32 32" aria-hidden="true" data-mood="${mood}">
-        <path class="av-shield" d="M16 4 L26 8 V16 C26 22 21.5 26.5 16 28 C10.5 26.5 6 22 6 16 V8 Z"
-          fill="${fill}" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M12.5 16.2 L15 18.7 L20 12.8" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+      return `<svg class="pixel-bot" viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">${body}
+        <path d="M6 8 L10 6 L14 8 L14 14 L10 17 L6 14 Z" fill="rgba(255,159,10,0.25)" stroke="${c}" stroke-width="1"/>
+        <rect x="9" y="10" width="2" height="3" fill="${c}"/>
       </svg>`;
     }
     if (key === 'whale') {
-      return `<svg class="bot bot-whale" viewBox="0 0 32 32" aria-hidden="true">
-        <g class="av-whale">
-          <ellipse cx="15" cy="18" rx="10" ry="6" fill="#12121a" stroke="${c}" stroke-width="1.3"/>
-          <path d="M24 16 C28 12 29 10 27 8 C25 11 24 13 22 15" fill="none" stroke="${c}" stroke-width="1.3" stroke-linecap="round"/>
-          <circle class="av-ring" cx="11.5" cy="16.5" r="4.2" fill="none" stroke="${c}" stroke-width="1" opacity=".4"/>
-          <circle cx="11.5" cy="16.5" r="2.6" fill="#0a0a10" stroke="${c}" stroke-width="1"/>
-          <circle class="av-eye-pupil" cx="11.5" cy="16.5" r="1.15" fill="${c}"/>
-        </g>
+      return `<svg class="pixel-bot" viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">${body}
+        <rect x="11" y="2" width="10" height="5" rx="1" fill="#0e1a1f" stroke="${c}" stroke-width="1"/>
+        <rect x="20" y="3" width="2" height="6" fill="${c}"/>
+        <rect x="19" y="8" width="4" height="2" fill="${c}" opacity=".8"/>
+        <rect x="8" y="4" width="3" height="2" fill="${c}" opacity=".7"/>
       </svg>`;
     }
+    return `<svg class="pixel-bot" viewBox="0 0 32 32" shape-rendering="crispEdges">${body}</svg>`;
+  }
+
+  function agentSpeech(key, a) {
+    if (!a) return '';
+    if (key === 'scanner') {
+      const last = (a.recent || []).find((x) => x.ok) || (a.recent || [])[0];
+      if (last) return `SCAN $${last.symbol}`;
+      return a.wsConnected || a.status === 'streaming' ? `SCAN ${a.pools || 0}` : '';
+    }
+    if (key === 'analyst') {
+      if (a.symbol != null && a.score != null) return `SCORE ${a.score} $${a.symbol}`;
+      return a.status === 'scoring' ? 'SCORING…' : '';
+    }
+    if (key === 'executor') {
+      const f = a.lastFill;
+      if (f) {
+        const sol = (Number(f.amountUsd) / 150);
+        return `BUY $${f.symbol} ${sol >= 0.1 ? sol.toFixed(1) : Number(f.amountUsd).toFixed(0)}`;
+      }
+      if (a.status === 'buying') return 'FIRING…';
+      return '';
+    }
+    if (key === 'risk') {
+      const la = a.lastAction;
+      if (la) {
+        if (la.pnl != null && la.pnl >= 0) return `WIN $${la.symbol} +${Math.abs(la.pnl).toFixed(1)}`;
+        if (la.pnl != null) return `CUT $${la.symbol}`;
+        return String(la.reason || 'GUARD').toUpperCase();
+      }
+      if (a.guarding) return `GUARD $${a.guarding}`;
+      if (a.status === 'cooldown') return 'COOLDOWN';
+      return '';
+    }
+    if (key === 'whale') {
+      if (a.lastAlert) return `ALERT $${a.lastAlert.symbol || ''}`.trim();
+      if (a.entrySignals) return `SMART ${a.entrySignals}`;
+      if (a.watching) return `WATCH ${a.watching}`;
+      return '';
+    }
     return '';
+  }
+
+  function agentStateLabel(key, a) {
+    const st = (a && a.status) || 'idle';
+    if (key === 'scanner') {
+      if (st === 'streaming' || st === 'scanning') return 'scan';
+      return 'idle';
+    }
+    if (key === 'analyst') {
+      if (st === 'passed') return 'pass';
+      if (st === 'scoring') return 'score';
+      return 'idle';
+    }
+    if (key === 'executor') {
+      if (st === 'buying' || st === 'filled') return 'fire';
+      return 'idle';
+    }
+    if (key === 'risk') {
+      if (st === 'cooldown') return 'block';
+      const la = a && a.lastAction;
+      if (la && la.pnl != null && la.pnl > 0) return 'win';
+      if (la && la.pnl != null && la.pnl < 0) return 'cut';
+      if (st === 'guarding') return 'guard';
+      return 'idle';
+    }
+    if (key === 'whale') {
+      if (a && a.lastAlert) return 'alert';
+      if (st === 'watching') return 'watch';
+      return 'idle';
+    }
+    return st;
+  }
+
+  function shortAgo(ts) {
+    if (!ts) return '—';
+    // tolerate seconds or ms
+    let t = Number(ts);
+    if (t < 1e12) t *= 1000;
+    const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (!Number.isFinite(s) || s > 86400 * 30) return '—';
+    if (s < 5) return 'now';
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    return `${Math.floor(s / 3600)}h`;
+  }
+
+  function pickActiveAgent(agents) {
+    const rank = { fire: 5, buying: 5, filled: 5, alert: 4, scan: 3, streaming: 3, scoring: 3, pass: 2, guard: 2, watch: 2, win: 2, block: 1, cut: 1, idle: 0 };
+    let best = null, bestScore = -1;
+    for (const key of AGENT_ORDER) {
+      const a = agents[key] || {};
+      const label = agentStateLabel(key, a);
+      const speech = agentSpeech(key, a);
+      const score = (rank[label] || rank[a.status] || 0) + (speech ? 0.5 : 0) + (a.flash ? 1 : 0);
+      if (score > bestScore) { bestScore = score; best = key; }
+    }
+    return bestScore > 0 ? best : 'scanner';
+  }
+
+  function sparkPath(history, color, id) {
+    const el = $(id);
+    if (!el) return;
+    if (!history || history.length < 2) {
+      el.innerHTML = `<path d="M0 14 L120 14" stroke="${color}" opacity=".35"/>`;
+      return;
+    }
+    const now = Date.now();
+    const windows = { '1H': 3600e3, '1D': 86400e3, ALL: Infinity };
+    const win = windows[tf] || windows['1D'];
+    let pts = history.filter((p) => now - p.t <= win);
+    if (pts.length < 2) pts = history.slice(-40);
+    const ys = pts.map((p) => p.equity);
+    const min = Math.min(...ys), max = Math.max(...ys);
+    const span = max - min || 1;
+    const w = 120, h = 28, pad = 2;
+    const d = pts.map((p, i) => {
+      const x = pad + (i / (pts.length - 1)) * (w - pad * 2);
+      const y = pad + (1 - (p.equity - min) / span) * (h - pad * 2);
+      return `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`;
+    }).join(' ');
+    const up = ys[ys.length - 1] >= ys[0];
+    el.innerHTML = `<path d="${d}" stroke="${up ? color : '#ff453a'}"/>`;
+  }
+
+  function renderDesk() {
+    if (!state) return;
+    const agents = state.agents || {};
+    const active = pickActiveAgent(agents);
+
+    $('deskBots').innerHTML = AGENT_ORDER.map((key) => {
+      const a = agents[key] || {};
+      const meta = AGENT_META[key];
+      const speech = key === active ? agentSpeech(key, a) : '';
+      const isActive = key === active;
+      return `<div class="desk-bot${isActive ? ' active' : ''}" style="--bot-glow:${meta.color}" data-agent="${key}">
+        <div class="bot-wrap">${pixelBot(key, meta.color)}</div>
+        <div class="bot-name" style="color:${meta.color}">${meta.name}</div>
+        <div class="speech-slot">${speech ? `<div class="speech-pill">${speech}</div>` : ''}</div>
+      </div>`;
+    }).join('');
+
+    $('deskStatus').innerHTML = AGENT_ORDER.map((key) => {
+      const a = agents[key] || {};
+      const meta = AGENT_META[key];
+      return `<div class="st-cell">
+        <div class="st-name" style="color:${meta.color}">${meta.short}</div>
+        <div class="st-state">${agentStateLabel(key, a)}</div>
+        <div class="st-ago">${shortAgo(a.lastRun)}</div>
+      </div>`;
+    }).join('');
+
+    const trades = (state.activity || []).filter((it) => it.type === 'buy' || it.type === 'sell' || it.pnl != null).slice(0, 3);
+    const stack = $('tradeStack');
+    if (!trades.length) {
+      stack.innerHTML = '<div class="trade-empty">No paper trades yet — desk is scanning</div>';
+    } else {
+      stack.innerHTML = trades.map((it) => {
+        const win = it.pnl != null ? it.pnl >= 0 : it.type === 'buy';
+        const loss = it.pnl != null && it.pnl < 0;
+        const right = it.pnl != null
+          ? `<div class="tc-right ${it.pnl >= 0 ? 'pos' : 'neg'}">${money(it.pnl)}<span class="sub">${pct(it.pnlPct)}</span></div>`
+          : `<div class="tc-right">${money(it.amountUsd)}</div>`;
+        const img = it.icon || iconFallback(it.symbol);
+        const title = it.type === 'buy' ? `BUY $${it.symbol}` : it.type === 'sell' ? `SELL $${it.symbol}` : `$${it.symbol}`;
+        return `<div class="trade-card ${loss ? 'loss' : win ? 'win' : ''}" data-mint="${it.mint || ''}">
+          <span class="tc-agent">${(it.agent || 'EXEC').toUpperCase().slice(0, 8)}</span>
+          <img src="${img}" alt="" onerror="this.src='${iconFallback(it.symbol)}'"/>
+          <div class="tc-mid"><div class="tc-title">${title}</div><div class="tc-sub">${it.detail || ago(it.ts)}</div></div>
+          ${right}
+        </div>`;
+      }).join('');
+      stack.querySelectorAll('.trade-card').forEach((el) => {
+        el.onclick = () => openCoin(el.dataset.mint);
+      });
+    }
+
+    $('agentBlurbs').innerHTML = AGENT_ORDER.map((key) => {
+      const a = agents[key] || {};
+      const meta = AGENT_META[key];
+      const speech = agentSpeech(key, a) || agentLivePlain(key, a);
+      return `<div class="blurb">
+        <div class="bn" style="color:${meta.color}">${meta.name}</div>
+        <div class="bd">${meta.role} <span class="last">Last: <strong>${speech || '—'}</strong></span></div>
+      </div>`;
+    }).join('');
   }
 
   function agentLiveLine(key, a, s) {
@@ -264,85 +442,9 @@
     return '';
   }
 
-  function agentSparkline(key, s) {
-    const act = s.activity || [];
-    const map = {
-      scanner: (it) => /scan|found|launch|new/i.test(it.type || '') || it.agent === 'Scanner',
-      analyst: (it) => /score|pass|analyst/i.test(it.type || '') || it.agent === 'Analyst',
-      executor: (it) => /buy|sell|fill|tp|stop/i.test(it.type || '') || it.agent === 'Executor',
-      risk: (it) => /stop|trail|tp|kill|risk|whale_exit/i.test(it.type || '') || it.agent === 'Risk',
-      whale: (it) => /whale/i.test(it.type || '') || it.agent === 'Whale Watch' || it.agent === 'Whale',
-    };
-    const filt = map[key] || (() => true);
-    let pts = act.filter(filt).slice(0, 16).reverse().map((it) => {
-      if (it.pnl != null) return Number(it.pnl);
-      if (it.amountUsd != null) return Number(it.amountUsd) * 0.05;
-      return 1;
-    });
-    if (pts.length < 2) {
-      // synthesize gentle idle wave from agent counters
-      const a = (s.agents && s.agents[key]) || {};
-      const seed = (a.pools || a.scored || a.trades || a.watching || 3) % 7;
-      pts = Array.from({ length: 10 }, (_, i) => Math.sin((i + seed) * 0.7) * (1 + seed * 0.1));
-    }
-    const w = 100, h = 14, pad = 1;
-    const min = Math.min(...pts), max = Math.max(...pts);
-    const span = max - min || 1;
-    const coords = pts.map((v, i) => {
-      const x = pad + (i / (pts.length - 1)) * (w - pad * 2);
-      const y = pad + (1 - (v - min) / span) * (h - pad * 2);
-      return [x, y];
-    });
-    const d = coords.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-    const last = pts[pts.length - 1];
-    const first = pts[0];
-    const up = last >= first;
-    const stroke = up ? '#39ff8c' : '#ff453a';
-    return `<svg class="agent-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" stroke="${stroke}"/></svg>`;
-  }
-
-  function flashClass(flash) {
-    if (flash === 'profit') return ' flash-profit';
-    if (flash === 'loss') return ' flash-loss';
-    if (flash === 'alert' || flash === 'entry') return ' flash-alert';
-    if (flash === 'pulse') return ' flash-pulse';
-    if (flash === 'block') return ' flash-loss';
-    return '';
-  }
-
-  function renderAgents(targetId, large) {
-    const el = $(targetId);
-    if (!el || !state) return;
-    const order = ['scanner', 'analyst', 'executor', 'risk', 'whale'];
-    el.innerHTML = order
-      .map((key) => {
-        const a = state.agents[key] || {};
-        const meta = AGENT_META[key];
-        const on = a.status && a.status !== 'idle';
-        const mood = key === 'risk' && a.lastAction && a.lastAction.pnl != null
-          ? (a.lastAction.pnl >= 0 ? 'ok' : 'block')
-          : '';
-        return `<div class="agent-card${on ? ' active-agent' : ''}${flashClass(a.flash)}" data-agent="${key}"${mood ? ` data-mood="${mood}"` : ''}>
-          <div class="agent-top">
-            <div class="agent-avatar">${agentSvg(key, a, meta)}</div>
-            <div class="agent-head">
-              <div class="agent-name">${meta.name}</div>
-              <div class="agent-status ${on ? 'on' : ''}">${a.status || 'idle'}</div>
-            </div>
-          </div>
-          <div class="agent-live">${agentLiveLine(key, a, state)}</div>
-          ${agentSparkline(key, state)}
-        </div>`;
-      })
-      .join('');
-    order.forEach((key) => {
-      const f = state.agents[key] && state.agents[key].flash;
-      if (f && f !== 'null') {
-        setTimeout(() => {
-          if (state.agents[key] && state.agents[key].flash === f) state.agents[key].flash = null;
-        }, 900);
-      }
-    });
+  function agentLivePlain(key, a) {
+    const html = agentLiveLine(key, a, state);
+    return html.replace(/<[^>]+>/g, '');
   }
 
   function renderActivity(targetId, limit) {
@@ -447,24 +549,32 @@
     setOdometer(state.equity);
     const g = state.gain || 0;
     const gp = state.gainPct || 0;
-    $('gainLine').textContent = `${g >= 0 ? '+' : ''}${money(g)} (${pct(gp)})`;
-    $('gainLine').classList.toggle('neg', g < 0);
-    $('multPill').textContent = `${(state.multiplier || 1).toFixed(2)}x`;
-    $('bannerText').textContent = (state.banner && state.banner.text) || 'JEV · Mode: PAPER';
-    $('modeBadge').textContent = 'Mode: PAPER';
-    if (state.banner && state.banner.icon) {
-      $('bannerIcon').src = state.banner.icon;
-      $('bannerIcon').classList.remove('hide');
-    } else $('bannerIcon').classList.add('hide');
-    $('disclaimer').textContent = state.disclaimer || '';
+    const gainEl = $('gainLine');
+    if (gainEl) {
+      gainEl.textContent = `${g >= 0 ? '+' : ''}${money(g)} (${pct(gp)})`;
+      gainEl.classList.toggle('neg', g < 0);
+    }
+    const cashPos = $('cashPos');
+    if (cashPos) cashPos.textContent = `${money(state.cash, 0)} · ${(state.positions || []).length}`;
+    const mult = $('multPill');
+    if (mult) mult.textContent = `${(state.multiplier || 1).toFixed(2)}x · peak ${money(state.peakBalance, 0)}`;
+    $('bannerText').textContent = (state.banner && state.banner.text) || 'Paper desk · memecoins';
+    $('modeBadge').textContent = 'PAPER';
+    const disc = $('disclaimer');
+    if (disc) disc.textContent = state.disclaimer || 'PAPER only · no real money · LIVE disabled';
     const running = state.settings && state.settings.running && !state.killSwitch;
-    $('runToggle').setAttribute('aria-pressed', running ? 'true' : 'false');
-    $('runToggle').querySelector('.run-label').textContent = state.killSwitch ? 'KILL' : running ? 'On' : 'Paused';
-    $('agentsRunning').textContent = running ? '5 agents' : state.killSwitch ? 'killed' : 'paused';
-    drawEquity($('equityChart'), state.equityHistory || []);
-    renderAgents('agentsGrid', false);
-    renderAgents('agentsFull', true);
-    renderActivity('activityHome', 5);
+    const rt = $('runToggle');
+    if (rt) {
+      rt.setAttribute('aria-pressed', running ? 'true' : 'false');
+      const lab = rt.querySelector('.run-label');
+      if (lab) lab.textContent = state.killSwitch ? 'Agents KILL' : running ? 'Agents On' : 'Agents Off';
+    }
+    const pk = $('pillKill');
+    if (pk) pk.classList.toggle('on', !!state.killSwitch);
+    sparkPath(state.equityHistory || [], '#00FF66', 'sparkPaper');
+    sparkPath(state.equityHistory || [], '#a78bfa', 'sparkCash');
+    renderDesk();
+    renderCoins();
     renderActivity('activityFull', 80);
     renderStats();
     renderAccount();
@@ -474,6 +584,27 @@
     }
   }
 
+  function renderCoins() {
+    const el = $('coinsList');
+    if (!el || !state) return;
+    const pos = state.positions || [];
+    if (!pos.length) {
+      el.innerHTML = '<div class="activity-empty">No open coins</div>';
+      return;
+    }
+    el.innerHTML = pos.map((p) => {
+      const cls = p.pnl >= 0 ? 'pos' : 'neg';
+      return `<div class="coin-row" data-mint="${p.mint}">
+        <img src="${p.icon || iconFallback(p.symbol)}" alt="" onerror="this.src='${iconFallback(p.symbol)}'"/>
+        <div><div class="cr-title">$${p.symbol}</div><div class="cr-sub">${money(p.markPrice || p.entryPrice, 6)} · ${ageLabel(p.ageMs)}</div></div>
+        <div class="cr-pnl ${cls}">${money(p.pnl)}<span class="sub">${pct(p.pnlPct)}</span></div>
+      </div>`;
+    }).join('');
+    el.querySelectorAll('.coin-row').forEach((row) => {
+      row.onclick = () => openCoin(row.dataset.mint);
+    });
+  }
+
   function burstConfetti() {
     const layer = $('confetti');
     layer.hidden = false;
@@ -481,7 +612,7 @@
     for (let i = 0; i < 28; i++) {
       const d = document.createElement('i');
       d.style.left = Math.random() * 100 + '%';
-      d.style.background = ['#39ff8c', '#a78bfa', '#5b8cff', '#ff9f0a'][i % 4];
+      d.style.background = ['#00FF66', '#a78bfa', '#5b8cff', '#ff9f0a'][i % 4];
       d.style.animationDelay = Math.random() * 0.4 + 's';
       layer.appendChild(d);
     }
@@ -548,16 +679,24 @@
       document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b === btn));
       document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${tab}`));
     });
-    $('seeAllActivity').onclick = () => {
-      document.querySelector('.nav-btn[data-tab="activity"]').click();
-    };
     $('tfRow').addEventListener('click', (e) => {
       const b = e.target.closest('.tf');
       if (!b) return;
       tf = b.dataset.tf;
       document.querySelectorAll('.tf').forEach((x) => x.classList.toggle('active', x === b));
-      if (state) drawEquity($('equityChart'), state.equityHistory || []);
+      if (state) {
+        sparkPath(state.equityHistory || [], '#00FF66', 'sparkPaper');
+        sparkPath(state.equityHistory || [], '#a78bfa', 'sparkCash');
+      }
     });
+    const pillKill = $('pillKill');
+    if (pillKill) {
+      pillKill.onclick = async () => {
+        const next = !(state && state.killSwitch);
+        await api('/api/kill', { method: 'POST', body: JSON.stringify({ kill: next }) }).catch(() => {});
+        await refresh();
+      };
+    }
     $('runToggle').onclick = async () => {
       const running = !($('runToggle').getAttribute('aria-pressed') === 'true');
       state = await api('/api/running', { method: 'POST', body: JSON.stringify({ running }) });

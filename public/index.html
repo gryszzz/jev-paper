@@ -7,19 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="JEV — Solana memecoin paper-trading agents. Mode: PAPER. No real money." />
-  <link rel="manifest" href="/manifest.json?v=6" />
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=6" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=6" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=6" />
+  <link rel="manifest" href="/manifest.json?v=7" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=7" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=7" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=7" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <title>JEV Paper</title>
-  <link rel="stylesheet" href="/styles.css?v=6" />
+  <link rel="stylesheet" href="/styles.css?v=7" />
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hide">
-    <img src="/img/j-logo.svg?v=6" alt="JEV" class="lock-logo" />
+    <img src="/img/j-logo.svg?v=7" alt="JEV" class="lock-logo" />
     <h1>JEV</h1>
     <p>Enter passcode to control agents</p>
     <input id="passInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Passcode" />
@@ -28,58 +28,65 @@
   </div>
 
   <div id="app">
-    <header class="top-banner" id="banner">
-      <img src="/img/j-mark.svg?v=6" class="banner-mark" alt="" />
-      <img id="bannerIcon" class="banner-icon hide" alt="" />
-      <span id="bannerText">JEV · Mode: PAPER</span>
-      <span class="mode-badge" id="modeBadge">Mode: PAPER</span>
+    <header class="desk-header">
+      <div class="desk-brand">
+        <img src="/img/j-mark.svg?v=7" class="desk-logo" alt="J." />
+        <div>
+          <div class="desk-title">JEV</div>
+          <div class="desk-sub" id="bannerText">Paper desk · memecoins</div>
+        </div>
+      </div>
+      <div class="desk-pills">
+        <button type="button" class="pill-live" id="pillLive" disabled title="Live disabled">LIVE</button>
+        <button type="button" class="pill-kill" id="pillKill">KILL</button>
+        <span class="pill-paper" id="modeBadge">PAPER</span>
+      </div>
     </header>
 
     <main id="view-home" class="view active">
-      <section class="balance-block">
-        <div class="balance-row">
-          <div id="balance" class="odometer">$0.00</div>
-          <button id="runToggle" class="run-toggle" type="button" aria-pressed="true">
-            <span class="dot"></span><span class="run-label">On</span>
-          </button>
+      <div class="tf-seg" id="tfRow">
+        <button class="tf" data-tf="1H">1H</button>
+        <button class="tf active" data-tf="1D">1D</button>
+        <button class="tf" data-tf="ALL">ALL</button>
+      </div>
+
+      <div class="bal-cards">
+        <div class="bal-card">
+          <div class="bal-label">PAPER</div>
+          <div class="bal-val" id="balance">$0.00</div>
+          <svg class="bal-spark" id="sparkPaper" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <div class="bal-sub" id="gainLine">+$0.00</div>
         </div>
-        <div class="gain-row">
-          <span id="gainLine" class="gain-line">+$0.00 (0%)</span>
-          <span id="multPill" class="mult-pill">1.00x</span>
+        <div class="bal-card bal-card-alt">
+          <div class="bal-label">CASH · POS</div>
+          <div class="bal-val sm" id="cashPos">$0 · 0</div>
+          <svg class="bal-spark" id="sparkCash" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <div class="bal-sub" id="multPill">1.00x · peak $0</div>
         </div>
-      </section>
+      </div>
 
-      <section class="chart-card">
-        <canvas id="equityChart" width="720" height="280"></canvas>
-        <div class="chart-meta" id="chartMeta"></div>
-        <div class="tf-row" id="tfRow">
-          <button class="tf active live" data-tf="LIVE"><span class="blink"></span>LIVE</button>
-          <button class="tf" data-tf="1H">1H</button>
-          <button class="tf" data-tf="4H">4H</button>
-          <button class="tf" data-tf="1D">1D</button>
-          <button class="tf" data-tf="1W">1W</button>
-          <button class="tf" data-tf="ALL">ALL</button>
+      <section class="desk-panel" id="deskPanel">
+        <div class="desk-orbs" aria-hidden="true">
+          <i class="orb o1"></i><i class="orb o2"></i><i class="orb o3"></i><i class="orb o4"></i><i class="orb o5"></i>
         </div>
+        <div class="desk-label">DESK</div>
+        <div class="desk-bots" id="deskBots"></div>
+        <div class="desk-status" id="deskStatus"></div>
       </section>
 
-      <section class="section-head">
-        <h2>Agents</h2>
-        <span class="pill-green" id="agentsRunning">5</span>
-      </section>
-      <div class="agents-grid" id="agentsGrid"></div>
-
-      <section class="section-head">
-        <h2>Activity</h2>
-        <button class="link-green" id="seeAllActivity" type="button">See all</button>
-      </section>
-      <div class="activity-list" id="activityHome"></div>
-
+      <div class="trade-stack" id="tradeStack"></div>
+      <div class="agent-blurbs" id="agentBlurbs"></div>
       <p class="disclaimer" id="disclaimer"></p>
     </main>
 
-    <main id="view-agents" class="view">
-      <h1 class="page-title">Agents</h1>
-      <div id="agentsFull" class="agents-grid agents-grid-lg"></div>
+    <main id="view-coins" class="view">
+      <h1 class="page-title">Coins</h1>
+      <div id="coinsList" class="coins-list"></div>
+    </main>
+
+    <main id="view-trades" class="view">
+      <h1 class="page-title">Trades</h1>
+      <div class="activity-list" id="activityFull"></div>
     </main>
 
     <main id="view-stats" class="view">
@@ -89,15 +96,7 @@
       <div id="strategyStats" class="strategy-stats"></div>
       <h2 class="subhead">Whale Watch</h2>
       <div id="whaleStats" class="whale-stats"></div>
-    </main>
-
-    <main id="view-activity" class="view">
-      <h1 class="page-title">Activity</h1>
-      <div class="activity-list" id="activityFull"></div>
-    </main>
-
-    <main id="view-account" class="view">
-      <h1 class="page-title">Account</h1>
+      <h2 class="subhead">Settings</h2>
       <div class="account-card">
         <div class="acct-row"><span>Mode</span><strong class="green" id="acctMode">PAPER</strong></div>
         <div class="acct-row"><span>Live flag</span><strong id="acctLive">DISABLED</strong></div>
@@ -107,39 +106,18 @@
         <div class="acct-row"><span>Open positions</span><strong id="acctPos">0</strong></div>
         <div class="acct-row"><span>Day PnL</span><strong id="acctDay">$0</strong></div>
       </div>
-
       <h2 class="subhead">Strategy preset</h2>
       <div class="preset-row" id="presetRow">
         <button type="button" data-preset="safe" class="preset-btn">Safe</button>
         <button type="button" data-preset="balanced" class="preset-btn active">Balanced</button>
         <button type="button" data-preset="aggressive" class="preset-btn">Aggressive</button>
       </div>
-
-      <label class="field">
-        <span>Starting balance (next reset)</span>
-        <input id="startBal" type="number" min="10" step="1" value="100" />
-      </label>
-      <label class="field">
-        <span>Slippage + fee haircut</span>
-        <input id="slippage" type="number" min="0" max="0.1" step="0.005" value="0.02" />
-      </label>
-      <label class="field">
-        <span>Min liquidity ($)</span>
-        <input id="minLiq" type="number" min="1000" step="1000" value="38000" />
-      </label>
-      <label class="field">
-        <span>Min analyst score</span>
-        <input id="minScore" type="number" min="1" max="100" step="1" value="70" />
-      </label>
-      <label class="field">
-        <span>Whale sell threshold (%)</span>
-        <input id="whaleDrop" type="number" min="1" max="100" step="1" value="15" />
-      </label>
-      <label class="field">
-        <span>Whale poll interval (ms)</span>
-        <input id="whalePoll" type="number" min="5000" max="120000" step="1000" value="20000" />
-      </label>
-
+      <label class="field"><span>Starting balance (next reset)</span><input id="startBal" type="number" min="10" step="1" value="100" /></label>
+      <label class="field"><span>Slippage + fee haircut</span><input id="slippage" type="number" min="0" max="0.1" step="0.005" value="0.02" /></label>
+      <label class="field"><span>Min liquidity ($)</span><input id="minLiq" type="number" min="1000" step="1000" value="38000" /></label>
+      <label class="field"><span>Min analyst score</span><input id="minScore" type="number" min="1" max="100" step="1" value="70" /></label>
+      <label class="field"><span>Whale sell threshold (%)</span><input id="whaleDrop" type="number" min="1" max="100" step="1" value="15" /></label>
+      <label class="field"><span>Whale poll interval (ms)</span><input id="whalePoll" type="number" min="5000" max="120000" step="1000" value="20000" /></label>
       <div class="btn-row">
         <button class="btn-purple" id="saveSettings" type="button">Save settings</button>
         <button class="btn-danger" id="killBtn" type="button">Kill switch</button>
@@ -147,8 +125,9 @@
       <div class="btn-row">
         <button class="btn-muted" id="clearKillBtn" type="button">Clear kill switch</button>
         <button class="btn-danger" id="resetBtn" type="button">Reset paper wallet</button>
+        <button class="btn-muted" id="runToggle" type="button" aria-pressed="true"><span class="run-label">Agents On</span></button>
       </div>
-      <p class="disclaimer">No wallet keys. LIVE_ENABLED=false. PumpPortal WS + DexScreener · Jito-sim fills · smart-money whales · HELIUS_API_KEY optional. Install: Share → Add to Home Screen.</p>
+      <p class="disclaimer">No wallet keys. LIVE_ENABLED=false. PumpPortal WS + DexScreener · Jito-sim fills · smart-money whales · HELIUS_API_KEY optional.</p>
     </main>
 
     <div id="coinSheet" class="sheet" aria-hidden="true">
@@ -176,27 +155,23 @@
 
     <nav class="bottom-nav" id="bottomNav">
       <button data-tab="home" class="nav-btn active" type="button">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5z"/></svg>
-        <span>Home</span>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l8 6v11a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1V9z"/></svg>
+        <span>Desk</span>
       </button>
-      <button data-tab="agents" class="nav-btn" type="button">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3.5 19c.8-3 2.8-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><path d="M14 19c.4-2 1.6-3.2 3.5-3.2 1.4 0 2.5.7 3 2"/></svg>
-        <span>Agents</span>
+      <button data-tab="coins" class="nav-btn" type="button">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10.5c.6-1 1.5-1.5 2.5-1.5s2 .6 2 1.5-1 1.5-2 1.5-2 .6-2 1.5.9 1.5 2 1.5 1.9-.5 2.5-1.5"/></svg>
+        <span>Coins</span>
+      </button>
+      <button data-tab="trades" class="nav-btn" type="button">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2-5 3 10 2-5h8"/></svg>
+        <span>Trades</span>
       </button>
       <button data-tab="stats" class="nav-btn" type="button">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-8"/></svg>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-8"/></svg>
         <span>Stats</span>
-      </button>
-      <button data-tab="activity" class="nav-btn" type="button">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2-5 3 10 2-5h8"/></svg>
-        <span>Activity</span>
-      </button>
-      <button data-tab="account" class="nav-btn" type="button">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 19c1.2-3.2 3.5-5 7-5s5.8 1.8 7 5"/></svg>
-        <span>Account</span>
       </button>
     </nav>
   </div>
-  <script src="/app.js?v=6"></script>
+  <script src="/app.js?v=7"></script>
 </body>
 </html>
