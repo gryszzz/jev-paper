@@ -813,6 +813,7 @@ class PaperEngine {
       }
 
       if (this.dailyLossHit()) {
+        state.agents.risk.flash = 'block';
         state.cooldownUntil = now() + (settings.cooldownMs || 300000);
         settings.running = false;
         setBanner(state, 'Daily loss limit hit — cooldown', null);
@@ -917,7 +918,10 @@ class PaperEngine {
   async paperBuy(pair) {
     const state = this.state;
     const settings = state.settings;
-    if (state.killSwitch || !settings.running) return null;
+    if (state.killSwitch || !settings.running) {
+      if (state.killSwitch) state.agents.risk.flash = 'block';
+      return null;
+    }
     if (state.positions.length >= settings.maxPositions) return null;
     if (!pair.priceUsd || pair.priceUsd <= 0) return null;
 
