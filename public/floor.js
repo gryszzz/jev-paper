@@ -1,15 +1,16 @@
-/* JEV Trading Floor v12 — premium sprite bots, rAF, neon stage */
+/* JEV Trading Floor v13 — compact agent badge icons (~40px), slim stage */
 (function (global) {
   'use strict';
 
   const META = {
-    scanner: { name: 'Scanner', color: '#5b8cff', src: '/img/bots/scanner.webp?v=12' },
-    analyst: { name: 'Analyst', color: '#a78bfa', src: '/img/bots/analyst.webp?v=12' },
-    risk: { name: 'Risk', color: '#ff9f0a', src: '/img/bots/risk.webp?v=12' },
-    executor: { name: 'Executor', color: '#00FF66', src: '/img/bots/executor.webp?v=12' },
-    whale: { name: 'Whale', color: '#22d3ee', src: '/img/bots/whale.webp?v=12' },
+    scanner: { name: 'Scanner', short: 'SCAN', color: '#5b8cff' },
+    analyst: { name: 'Analyst', short: 'ANAL', color: '#a78bfa' },
+    risk: { name: 'Risk', short: 'RISK', color: '#ff9f0a' },
+    executor: { name: 'Executor', short: 'EXEC', color: '#00FF66' },
+    whale: { name: 'Whale', short: 'WHALE', color: '#22d3ee' },
   };
   const ORDER = ['scanner', 'analyst', 'risk', 'executor', 'whale'];
+  const BADGE = 40; // px icon diameter target
 
   function clamp(n, a, b) {
     return Math.max(a, Math.min(b, n));
@@ -20,10 +21,12 @@
   function easeOut(t) {
     return 1 - Math.pow(1 - t, 3);
   }
-  function easeOutBack(t) {
-    const c1 = 1.70158;
-    const c3 = c1 + 1;
-    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  function hexAlpha(hex, a) {
+    const n = hex.replace('#', '');
+    const r = parseInt(n.slice(0, 2), 16);
+    const g = parseInt(n.slice(2, 4), 16);
+    const b = parseInt(n.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${a})`;
   }
 
   function createFloor(canvas) {
@@ -32,29 +35,18 @@
     const reduced =
       typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    const sprites = {};
     const bots = {};
     ORDER.forEach((k, i) => {
       bots[k] = {
         key: k,
-        home: 0.1 + i * 0.2,
-        x: 0.1 + i * 0.2,
-        y: 0.58,
-        bob: Math.random() * Math.PI * 2,
-        breath: Math.random() * Math.PI * 2,
+        home: (i + 0.5) / ORDER.length,
+        x: (i + 0.5) / ORDER.length,
         speech: '',
         speechT: 0,
         active: false,
-        flash: 0,
-        celebrate: 0,
-        alert: 0,
-        scale: 1,
-        shake: 0,
+        pulse: 0,
+        tick: 0,
       };
-      const img = new Image();
-      img.decoding = 'async';
-      img.src = META[k].src;
-      sprites[k] = img;
     });
 
     let w = 0;
@@ -64,37 +56,15 @@
     let last = 0;
     let running = false;
     let tSec = 0;
-    let radarA = 0;
-    let periA = 0;
-    let scoreRing = 0;
-    let scoreVal = null;
-    let scoreSym = '';
     let coin = null;
-    let bursts = [];
-    let pings = [];
-    let ripples = [];
-    let particles = [];
-    let trails = [];
     let lastSig = '';
     let agentsSnap = {};
-    let parallax = 0;
-
-    // ambient particles
-    for (let i = 0; i < 28; i++) {
-      particles.push({
-        x: Math.random(),
-        y: Math.random() * 0.7,
-        r: 0.6 + Math.random() * 1.6,
-        sp: 0.02 + Math.random() * 0.06,
-        a: 0.15 + Math.random() * 0.35,
-        hue: Math.random(),
-      });
-    }
+    let ticks = []; // green win ticks {x,y,life}
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
       const cssW = Math.max(280, rect.width || canvas.parentElement?.clientWidth || 400);
-      const cssH = 230;
+      const cssH = 100;
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.round(cssW * dpr);
       canvas.height = Math.round(cssH * dpr);
@@ -108,31 +78,15 @@
     function speak(key, text, ms) {
       const b = bots[key];
       if (!b || !text) return;
-      b.speech = String(text).slice(0, 22);
-      b.speechT = ms || 2800;
-    }
-
-    function burst(x, y, color, n) {
-      for (let i = 0; i < (n || 12); i++) {
-        const a = Math.random() * Math.PI * 2;
-        const sp = 50 + Math.random() * 110;
-        bursts.push({
-          x,
-          y,
-          vx: Math.cos(a) * sp,
-          vy: Math.sin(a) * sp - 40,
-          life: 0.55 + Math.random() * 0.4,
-          age: 0,
-          c: color,
-          r: 2 + Math.random() * 3,
-        });
-      }
+      b.speech = String(text).slice(0, 18);
+      b.speechT = ms || 2400;
     }
 
     function startCoinPass(symbol) {
-      coin = { prog: 0, symbol: symbol || '???', phase: 'hand' };
-      speak('scanner', `PASS $${symbol || ''}`, 1800);
+      coin = { prog: 0, symbol: symbol || '???' };
+      speak('scanner', `$${symbol || ''}`, 1600);
       bots.scanner.active = true;
+      bots.scanner.pulse = 1;
     }
 
     function onState(state) {
@@ -144,55 +98,61 @@
         scanner: (() => {
           const a = agents.scanner || {};
           const last = (a.recent || []).find((x) => x.ok) || (a.recent || [])[0];
-          if (last) return `SCAN $${last.symbol}`;
-          if (a.wsConnected || a.status === 'streaming') return `LIVE ${a.launches || a.pools || 0}`;
-          return a.status === 'scanning' ? 'SCAN…' : '';
+          if (last) return `$${last.symbol}`;
+          if (a.wsConnected || a.status === 'streaming') return 'LIVE';
+          return a.status === 'scanning' ? 'scan' : '';
         })(),
         analyst: (() => {
           const a = agents.analyst || {};
-          if (a.symbol != null && a.score != null) return `${a.score} $${a.symbol}`;
-          return a.status === 'scoring' ? 'SCORE…' : '';
+          if (a.symbol != null && a.score != null) return `${a.score}`;
+          return a.status === 'scoring' ? 'score' : '';
         })(),
         risk: (() => {
           const a = agents.risk || {};
-          if (a.guarding) return `GUARD $${a.guarding}`;
-          if (a.status === 'cooldown') return 'COOLDOWN';
+          if (a.guarding) return 'guard';
           const la = a.lastAction;
-          if (la && la.pnl != null) return la.pnl >= 0 ? `WIN +${Math.abs(la.pnl).toFixed(1)}` : `CUT $${la.symbol || ''}`;
+          if (la && la.pnl != null) return la.pnl >= 0 ? `+${Math.abs(la.pnl).toFixed(1)}` : 'cut';
           return '';
         })(),
         executor: (() => {
           const a = agents.executor || {};
-          if (a.status === 'buying') return 'FIRING…';
+          if (a.status === 'buying') return 'buy';
           const f = a.lastFill;
-          if (f) return `BUY $${f.symbol}`;
+          if (f) return `$${f.symbol}`;
           return '';
         })(),
         whale: (() => {
           const a = agents.whale || {};
-          if (a.lastAlert) return `ALERT $${a.lastAlert.symbol || ''}`.trim();
-          if (a.watching) return `WATCH ${a.watching}`;
+          if (a.lastAlert) return 'alert';
+          if (a.watching) return `×${a.watching}`;
           return '';
         })(),
       };
-      for (const k of ORDER) {
-        if (lines[k]) speak(k, lines[k], 2600);
-        bots[k].active = false;
-        const a = agents[k] || {};
-        if (a.flash) bots[k].flash = 1;
-      }
 
-      const an = agents.analyst || {};
-      if (an.score != null) {
-        scoreVal = an.score;
-        scoreSym = an.symbol || '';
+      for (const k of ORDER) {
+        if (lines[k]) speak(k, lines[k], 2200);
+        bots[k].active = false;
       }
 
       const sc = agents.scanner || {};
-      if (sc.status === 'scanning' || sc.status === 'streaming') bots.scanner.active = true;
-      if (an.status === 'scoring') bots.analyst.active = true;
-      if ((agents.executor || {}).status === 'buying') bots.executor.active = true;
+      const an = agents.analyst || {};
+      if (sc.status === 'scanning' || sc.status === 'streaming') {
+        bots.scanner.active = true;
+        bots.scanner.pulse = Math.max(bots.scanner.pulse, 0.6);
+      }
+      if (an.status === 'scoring') {
+        bots.analyst.active = true;
+        bots.analyst.pulse = Math.max(bots.analyst.pulse, 0.6);
+      }
+      if ((agents.executor || {}).status === 'buying') {
+        bots.executor.active = true;
+        bots.executor.pulse = 1;
+      }
       if ((agents.whale || {}).watching) bots.whale.active = true;
+      if ((agents.whale || {}).lastAlert) {
+        bots.whale.active = true;
+        bots.whale.pulse = 1;
+      }
 
       const act = (state.activity && state.activity[0]) || null;
       const sig = act ? `${act.ts}|${act.type}|${act.symbol}|${act.pnl}` : '';
@@ -201,35 +161,25 @@
         const t = (act.type || '').toLowerCase();
         if (t === 'buy') {
           startCoinPass(act.symbol);
-          speak('executor', `BUY $${act.symbol}`, 3200);
-          bots.executor.flash = 1;
-          bots.executor.active = true;
-          bots.executor.celebrate = 1;
+          speak('executor', `$${act.symbol}`, 2800);
+          bots.executor.pulse = 1;
         } else if (act.pnl != null && (t === 'sell' || t === 'tp' || t === 'stopped')) {
-          const bx = bots.risk.x * w;
-          const by = bots.risk.y * h - 36;
           if (act.pnl >= 0) {
-            burst(bx, by, '#00FF66', 18);
-            speak('risk', `WIN +${Math.abs(act.pnl).toFixed(1)}`, 3200);
-            bots.risk.celebrate = 1.2;
-            bots.executor.celebrate = 0.9;
+            speak('risk', `+${Math.abs(act.pnl).toFixed(1)}`, 2800);
+            bots.risk.pulse = 1;
+            bots.risk.tick = 1;
+            ticks.push({
+              x: bots.risk.x,
+              y: 0.42,
+              life: 1,
+            });
           } else {
-            burst(bx, by, '#ff453a', 14);
-            speak('risk', `CUT $${act.symbol || ''}`, 3200);
-            bots.risk.alert = 1;
+            speak('risk', 'cut', 2400);
+            bots.risk.pulse = 1;
           }
         } else if (t === 'whale_exit' || (agents.whale && agents.whale.lastAlert)) {
-          const wx = bots.whale.x * w;
-          const wy = bots.whale.y * h - 40;
-          ripples.push({ x: wx, y: wy, r: 4, life: 1 });
-          ripples.push({ x: wx, y: wy, r: 2, life: 1.15 });
-          speak(
-            'whale',
-            `ALERT $${(agents.whale.lastAlert && agents.whale.lastAlert.symbol) || act.symbol || ''}`,
-            3500
-          );
-          bots.whale.flash = 1;
-          bots.whale.alert = 1.2;
+          speak('whale', 'alert', 3000);
+          bots.whale.pulse = 1;
         }
       }
 
@@ -240,216 +190,6 @@
           if (!coin) startCoinPass(an.symbol);
         }
       }
-
-      if (sc.status === 'scanning' || sc.status === 'streaming' || sc.flash) {
-        if (pings.length < 7 && Math.random() < 0.4) {
-          pings.push({
-            x: bots.scanner.x * w + (Math.random() - 0.5) * 50,
-            y: bots.scanner.y * h - 55 - Math.random() * 35,
-            life: 1,
-          });
-        }
-      }
-    }
-
-    function softOrb(x, y, r, c) {
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, c);
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    function drawStage() {
-      const g = ctx.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, '#04040a');
-      g.addColorStop(0.45, '#080812');
-      g.addColorStop(1, '#030308');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, w, h);
-
-      // parallax neon orbs
-      const px = Math.sin(parallax) * 8;
-      softOrb(w * 0.12 + px, h * 0.28, 78, 'rgba(91,140,255,0.14)');
-      softOrb(w * 0.5 - px * 0.5, h * 0.18, 90, 'rgba(0,255,102,0.07)');
-      softOrb(w * 0.88 - px, h * 0.32, 72, 'rgba(34,211,238,0.12)');
-      softOrb(w * 0.72 + px * 0.3, h * 0.2, 50, 'rgba(167,139,250,0.1)');
-
-      // perspective grid floor
-      const horizon = h * 0.52;
-      const floorY = h * 0.82;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, horizon, w, h - horizon);
-      ctx.clip();
-      ctx.strokeStyle = 'rgba(0,255,102,0.08)';
-      ctx.lineWidth = 1;
-      const vanishX = w * 0.5 + Math.sin(parallax * 0.4) * 12;
-      for (let i = -6; i <= 6; i++) {
-        const x0 = vanishX + i * 28;
-        ctx.beginPath();
-        ctx.moveTo(vanishX, horizon);
-        ctx.lineTo(x0 + i * 40, h + 10);
-        ctx.stroke();
-      }
-      for (let j = 0; j < 8; j++) {
-        const t = j / 8;
-        const y = horizon + Math.pow(t, 1.6) * (h - horizon);
-        const alpha = 0.04 + t * 0.1;
-        ctx.strokeStyle = `rgba(91,140,255,${alpha})`;
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(w, y);
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      // neon stage strip
-      const stageY = floorY;
-      const neon = ctx.createLinearGradient(0, stageY, w, stageY);
-      neon.addColorStop(0, 'rgba(91,140,255,0)');
-      neon.addColorStop(0.18, 'rgba(91,140,255,0.65)');
-      neon.addColorStop(0.5, 'rgba(0,255,102,0.85)');
-      neon.addColorStop(0.82, 'rgba(34,211,238,0.65)');
-      neon.addColorStop(1, 'rgba(34,211,238,0)');
-      ctx.strokeStyle = neon;
-      ctx.lineWidth = 2.5;
-      ctx.shadowColor = 'rgba(0,255,102,0.45)';
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.moveTo(6, stageY);
-      ctx.lineTo(w - 6, stageY);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // ambient dust
-      if (!reduced) {
-        for (const p of particles) {
-          const hx = p.hue;
-          const col =
-            hx < 0.33
-              ? '91,140,255'
-              : hx < 0.66
-                ? '0,255,102'
-                : '34,211,238';
-          ctx.globalAlpha = p.a * (0.6 + 0.4 * Math.sin(tSec * 2 + p.x * 10));
-          ctx.fillStyle = `rgb(${col})`;
-          ctx.beginPath();
-          ctx.arc(((p.x + parallax * 0.02) % 1) * w, p.y * h, p.r, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1;
-      }
-    }
-
-    function drawSpriteBot(b, dt) {
-      const meta = META[b.key];
-      const img = sprites[b.key];
-      const ready = img && img.complete && img.naturalWidth > 0;
-
-      // motion
-      const bob = reduced ? 0 : Math.sin(b.bob) * 3.2;
-      const breath = reduced ? 1 : 1 + Math.sin(b.breath) * 0.018;
-      let shakeX = 0;
-      if (b.alert > 0 && !reduced) {
-        shakeX = Math.sin(tSec * 48) * 3.5 * b.alert;
-      }
-      const celeb = b.celebrate > 0 && !reduced ? easeOutBack(clamp(1 - b.celebrate, 0, 1)) : 0;
-      const jump = b.celebrate > 0 && !reduced ? Math.sin((1 - b.celebrate) * Math.PI) * 10 : 0;
-      const scale = (b.active ? 1.05 : 1) * breath * (1 + (b.celebrate > 0 ? 0.08 * Math.sin((1 - b.celebrate) * Math.PI * 2) : 0));
-
-      const x = b.x * w + shakeX;
-      const y = b.y * h + bob - jump;
-      const size = Math.min(96, w * 0.22) * scale;
-
-      // soft contact shadow
-      ctx.save();
-      ctx.globalAlpha = 0.35 + (b.active ? 0.15 : 0);
-      ctx.fillStyle = '#000';
-      ctx.beginPath();
-      ctx.ellipse(x, b.y * h + 42, size * 0.28, 5.5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // ground rim glow
-      const glowA = b.active || b.flash > 0 || b.celebrate > 0 ? 0.55 : 0.22;
-      softOrb(x, b.y * h + 40, size * 0.42, hexAlpha(meta.color, glowA));
-
-      // sprite
-      ctx.save();
-      ctx.translate(x, y);
-      if (b.flash > 0) {
-        ctx.shadowColor = meta.color;
-        ctx.shadowBlur = 22;
-      } else if (b.active) {
-        ctx.shadowColor = meta.color;
-        ctx.shadowBlur = 12;
-      }
-
-      if (ready) {
-        ctx.drawImage(img, -size / 2, -size * 0.72, size, size);
-      } else {
-        // lightweight fallback silhouette while loading
-        ctx.fillStyle = meta.color;
-        ctx.globalAlpha = 0.35;
-        ctx.beginPath();
-        ctx.arc(0, -10, 14, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-
-      // role FX overlays (radar beam, score ring, bolt spark, peri track)
-      if (b.key === 'scanner' && !reduced) drawRadarOverlay(meta.color, size);
-      if (b.key === 'analyst') drawScoreOverlay(meta.color, size);
-      if (b.key === 'executor' && (b.active || b.celebrate > 0) && !reduced) drawBoltBurst(meta.color, size);
-      if (b.key === 'whale' && !reduced) drawPeriTrack(meta.color, size);
-
-      ctx.restore();
-
-      // name label — floating, no box
-      ctx.font = '800 10px Inter, system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = meta.color;
-      ctx.shadowColor = 'rgba(0,0,0,0.8)';
-      ctx.shadowBlur = 4;
-      ctx.fillText(meta.name, x, b.y * h + 54);
-      ctx.shadowBlur = 0;
-
-      // speech bubble
-      if (b.speech && b.speechT > 0) {
-        b.speechT -= dt * 1000;
-        const alpha = clamp(b.speechT / 400, 0, 1);
-        ctx.globalAlpha = alpha;
-        ctx.font = '700 9px Inter, system-ui, sans-serif';
-        const tw = ctx.measureText(b.speech).width;
-        const bx = x;
-        const by = y - size * 0.78;
-        ctx.fillStyle = 'rgba(6,6,12,0.72)';
-        roundRect(bx - tw / 2 - 7, by - 11, tw + 14, 17, 9);
-        ctx.fill();
-        ctx.strokeStyle = meta.color;
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = alpha * 0.9;
-        ctx.stroke();
-        ctx.fillStyle = '#fff';
-        ctx.globalAlpha = alpha;
-        ctx.fillText(b.speech, bx, by + 2);
-        ctx.globalAlpha = 1;
-      }
-
-      if (b.flash > 0) b.flash = Math.max(0, b.flash - dt * 1.15);
-      if (b.celebrate > 0) b.celebrate = Math.max(0, b.celebrate - dt * 0.85);
-      if (b.alert > 0) b.alert = Math.max(0, b.alert - dt * 0.9);
-    }
-
-    function hexAlpha(hex, a) {
-      const n = hex.replace('#', '');
-      const r = parseInt(n.slice(0, 2), 16);
-      const g = parseInt(n.slice(2, 4), 16);
-      const b = parseInt(n.slice(4, 6), 16);
-      return `rgba(${r},${g},${b},${a})`;
     }
 
     function roundRect(x, y, rw, rh, r) {
@@ -463,75 +203,191 @@
       ctx.closePath();
     }
 
-    function drawRadarOverlay(c, size) {
-      ctx.save();
-      ctx.translate(0, -size * 0.55);
-      ctx.rotate(radarA);
-      const rg = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 0.28);
-      rg.addColorStop(0, hexAlpha(c, 0.45));
-      rg.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = rg;
+    function drawStage() {
+      ctx.fillStyle = '#050508';
+      ctx.fillRect(0, 0, w, h);
+      // faint baseline
+      const y = h * 0.72;
+      const g = ctx.createLinearGradient(0, y, w, y);
+      g.addColorStop(0, 'rgba(91,140,255,0)');
+      g.addColorStop(0.5, 'rgba(0,255,102,0.18)');
+      g.addColorStop(1, 'rgba(34,211,238,0)');
+      ctx.strokeStyle = g;
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, size * 0.28, -0.35, 0.35);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
+      ctx.moveTo(12, y);
+      ctx.lineTo(w - 12, y);
+      ctx.stroke();
     }
 
-    function drawScoreOverlay(c, size) {
-      ctx.save();
-      ctx.translate(size * 0.38, -size * 0.15);
-      ctx.strokeStyle = hexAlpha(c, 0.7);
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(0, 0, 11, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(0, 0, 11, -Math.PI / 2, -Math.PI / 2 + scoreRing * Math.PI * 2);
-      ctx.strokeStyle = '#00FF66';
-      ctx.lineWidth = 2.2;
-      ctx.stroke();
-      if (scoreVal != null) {
-        ctx.fillStyle = '#fff';
-        ctx.font = '800 8px Inter, system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(String(scoreVal), 0, 3);
+    /** Bold white glyph on dark rounded badge — original JEV marks, not Grok/xAI */
+    function drawGlyph(key, size) {
+      const s = size;
+      ctx.strokeStyle = '#fff';
+      ctx.fillStyle = '#fff';
+      ctx.lineWidth = Math.max(1.6, s * 0.07);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      if (key === 'scanner') {
+        // radar arcs
+        ctx.beginPath();
+        ctx.arc(0, s * 0.12, s * 0.18, -Math.PI * 0.85, -Math.PI * 0.15);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, s * 0.12, s * 0.3, -Math.PI * 0.78, -Math.PI * 0.22);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, s * 0.12, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (key === 'analyst') {
+        // eye + mini chart
+        ctx.beginPath();
+        ctx.ellipse(0, -s * 0.06, s * 0.22, s * 0.14, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, -s * 0.06, s * 0.06, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.22, s * 0.22);
+        ctx.lineTo(-s * 0.06, s * 0.1);
+        ctx.lineTo(s * 0.06, s * 0.18);
+        ctx.lineTo(s * 0.22, s * 0.02);
+        ctx.stroke();
+      } else if (key === 'risk') {
+        // shield
+        ctx.beginPath();
+        ctx.moveTo(0, -s * 0.28);
+        ctx.lineTo(s * 0.22, -s * 0.14);
+        ctx.lineTo(s * 0.22, s * 0.06);
+        ctx.quadraticCurveTo(s * 0.22, s * 0.26, 0, s * 0.32);
+        ctx.quadraticCurveTo(-s * 0.22, s * 0.26, -s * 0.22, s * 0.06);
+        ctx.lineTo(-s * 0.22, -s * 0.14);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, -s * 0.1);
+        ctx.lineTo(0, s * 0.14);
+        ctx.stroke();
+      } else if (key === 'executor') {
+        // bolt
+        ctx.beginPath();
+        ctx.moveTo(s * 0.04, -s * 0.3);
+        ctx.lineTo(-s * 0.12, s * 0.02);
+        ctx.lineTo(s * 0.02, s * 0.02);
+        ctx.lineTo(-s * 0.04, s * 0.3);
+        ctx.lineTo(s * 0.16, -s * 0.02);
+        ctx.lineTo(0, -s * 0.02);
+        ctx.closePath();
+        ctx.fill();
+      } else if (key === 'whale') {
+        // whale tail
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.02, s * 0.08);
+        ctx.quadraticCurveTo(-s * 0.05, -s * 0.05, -s * 0.28, -s * 0.22);
+        ctx.quadraticCurveTo(-s * 0.12, -s * 0.02, -s * 0.02, s * 0.08);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(s * 0.02, s * 0.08);
+        ctx.quadraticCurveTo(s * 0.05, -s * 0.05, s * 0.28, -s * 0.22);
+        ctx.quadraticCurveTo(s * 0.12, -s * 0.02, s * 0.02, s * 0.08);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(0, s * 0.08);
+        ctx.lineTo(0, s * 0.28);
+        ctx.stroke();
       }
-      ctx.restore();
     }
 
-    function drawBoltBurst(c, size) {
-      ctx.save();
-      ctx.translate(size * 0.12, -size * 0.55);
-      ctx.shadowColor = c;
-      ctx.shadowBlur = 14;
-      ctx.fillStyle = c;
-      ctx.beginPath();
-      ctx.moveTo(2, -9);
-      ctx.lineTo(-5, 1);
-      ctx.lineTo(0, 1);
-      ctx.lineTo(-3, 10);
-      ctx.lineTo(6, -1);
-      ctx.lineTo(1, -1);
-      ctx.closePath();
+    function drawBadge(b) {
+      const meta = META[b.key];
+      const size = Math.min(BADGE, w * 0.11);
+      const x = b.x * w;
+      const y = h * 0.42;
+      const active = b.active || b.pulse > 0.15;
+      const pulse =
+        reduced || !active ? 0 : 0.5 + 0.5 * Math.sin(tSec * 3.2 + b.home * 8);
+
+      // soft glow under ring when active
+      if (active && !reduced) {
+        const g = ctx.createRadialGradient(x, y, size * 0.2, x, y, size * 0.85);
+        g.addColorStop(0, hexAlpha(meta.color, 0.18 + pulse * 0.12));
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, size * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // dark badge (rounded square)
+      const r = size * 0.28;
+      const half = size / 2;
+      ctx.fillStyle = '#12121a';
+      roundRect(x - half, y - half, size, size, r);
       ctx.fill();
-      ctx.restore();
-    }
+      ctx.fillStyle = '#0a0a10';
+      roundRect(x - half + 1, y - half + 1, size - 2, size - 2, r - 1);
+      ctx.fill();
 
-    function drawPeriTrack(c, size) {
-      ctx.save();
-      ctx.translate(0, -size * 0.62);
-      ctx.rotate(periA * 0.2);
-      ctx.strokeStyle = hexAlpha(c, 0.55);
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(0, 0, size * 0.22, -0.8 + periA, 0.8 + periA);
+      // colored ring
+      const ringW = active ? 2.2 : 1.5;
+      ctx.strokeStyle = hexAlpha(meta.color, active ? 0.75 + pulse * 0.25 : 0.45);
+      ctx.lineWidth = ringW;
+      if (active && !reduced) {
+        ctx.shadowColor = meta.color;
+        ctx.shadowBlur = 6 + pulse * 6;
+      }
+      roundRect(x - half + 1, y - half + 1, size - 2, size - 2, r - 1);
       ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // white glyph
+      ctx.save();
+      ctx.translate(x, y);
+      drawGlyph(b.key, size);
       ctx.restore();
+
+      // tiny name
+      ctx.font = '700 8px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = hexAlpha(meta.color, 0.9);
+      ctx.fillText(meta.name, x, y + half + 11);
+
+      // speech pill
+      if (b.speech && b.speechT > 0) {
+        const alpha = clamp(b.speechT / 350, 0, 1);
+        ctx.globalAlpha = alpha;
+        ctx.font = '600 8px Inter, system-ui, sans-serif';
+        const tw = Math.min(ctx.measureText(b.speech).width, w * 0.16);
+        const pw = tw + 10;
+        const px = x - pw / 2;
+        const py = y - half - 16;
+        ctx.fillStyle = 'rgba(10,10,16,0.85)';
+        roundRect(px, py, pw, 14, 7);
+        ctx.fill();
+        ctx.strokeStyle = hexAlpha(meta.color, 0.55);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = '#eee';
+        ctx.fillText(b.speech, x, py + 10);
+        ctx.globalAlpha = 1;
+      }
+
+      // green tick overlay on win
+      if (b.tick > 0) {
+        ctx.globalAlpha = clamp(b.tick, 0, 1);
+        ctx.strokeStyle = '#00FF66';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(x - 5, y + 2);
+        ctx.lineTo(x - 1, y + 7);
+        ctx.lineTo(x + 8, y - 6);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
     }
 
-    function drawCoinToken() {
+    function drawCoinDot() {
       if (!coin) return;
       const path = [
         { k: 'scanner', t: 0 },
@@ -546,37 +402,23 @@
       const span = b.t - a.t || 1;
       const u = easeOut(clamp((coin.prog - a.t) / span, 0, 1));
       const x = lerp(bots[a.k].x, bots[b.k].x, u) * w;
-      const y = lerp(bots[a.k].y, bots[b.k].y, u) * h - 48 - Math.sin(u * Math.PI) * 22;
-
-      // trail sparkles
-      if (!reduced && Math.random() < 0.7) {
-        trails.push({
-          x: x + (Math.random() - 0.5) * 6,
-          y: y + (Math.random() - 0.5) * 6,
-          life: 1,
-          c: '#f5c542',
-        });
-      }
+      const y = h * 0.42 - 22 - Math.sin(u * Math.PI) * 6;
 
       ctx.save();
-      ctx.translate(x, y);
+      ctx.fillStyle = '#f5c542';
       ctx.shadowColor = '#f5c542';
-      ctx.shadowBlur = 16;
-      const grd = ctx.createRadialGradient(0, 0, 1, 0, 0, 9);
-      grd.addColorStop(0, '#ffe08a');
-      grd.addColorStop(1, '#d4a017');
-      ctx.fillStyle = grd;
+      ctx.shadowBlur = 8;
       ctx.beginPath();
-      ctx.arc(0, 0, 8, 0, Math.PI * 2);
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#5a4010';
-      ctx.font = '800 9px Inter, system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('$', 0, 3.5);
       ctx.restore();
 
       bots[a.k].active = true;
-      if (u > 0.45) bots[b.k].active = true;
+      bots[a.k].pulse = Math.max(bots[a.k].pulse, 0.7);
+      if (u > 0.5) {
+        bots[b.k].active = true;
+        bots[b.k].pulse = Math.max(bots[b.k].pulse, 0.7);
+      }
     }
 
     function tick(ts) {
@@ -586,118 +428,56 @@
       tSec = ts / 1000;
 
       if (!reduced) {
-        parallax += dt * 0.35;
-        radarA += dt * 2.4;
-        periA = Math.sin(ts / 850) * 0.55;
-        scoreRing = scoreVal != null ? clamp(scoreVal / 100, 0, 1) : (scoreRing + dt * 0.15) % 1;
-
-        for (const p of particles) {
-          p.y -= p.sp * dt;
-          if (p.y < -0.05) {
-            p.y = 0.75;
-            p.x = Math.random();
-          }
-        }
-
         for (const k of ORDER) {
           const b = bots[k];
-          b.bob += dt * (2.1 + b.home);
-          b.breath += dt * (1.4 + b.home * 0.5);
-          if (k === 'scanner') {
-            const patrol = Math.sin(ts / 1500) * 0.028;
-            b.x = lerp(b.x, b.home + patrol, 0.07);
-          } else if (k === 'executor' && ((agentsSnap.executor || {}).status === 'buying' || b.celebrate > 0)) {
-            b.x = lerp(b.x, b.home + 0.015, 0.18);
-          } else if (k === 'whale' && b.alert > 0) {
-            b.x = lerp(b.x, b.home, 0.2);
-          } else {
-            b.x = lerp(b.x, b.home, 0.06);
-          }
+          b.x = lerp(b.x, b.home, 0.12);
+          if (b.pulse > 0) b.pulse = Math.max(0, b.pulse - dt * 0.55);
+          if (b.tick > 0) b.tick = Math.max(0, b.tick - dt * 0.9);
+          if (b.speechT > 0) b.speechT -= dt * 1000;
         }
-
         if (coin) {
-          coin.prog += dt * 0.52;
+          coin.prog += dt * 0.7;
           if (coin.prog >= 1) {
-            const ex = bots.executor.x * w;
-            const ey = bots.executor.y * h - 36;
-            burst(ex, ey, '#00FF66', 16);
-            speak('executor', `FILL $${coin.symbol}`, 2500);
-            bots.executor.celebrate = 1;
+            speak('executor', `$${coin.symbol}`, 2000);
+            bots.executor.pulse = 1;
+            bots.executor.tick = 0.8;
+            ticks.push({ x: bots.executor.x, y: 0.42, life: 1 });
             coin = null;
           }
         }
+      } else {
+        for (const k of ORDER) {
+          const b = bots[k];
+          if (b.speechT > 0) b.speechT -= dt * 1000;
+        }
       }
 
-      for (const p of pings) p.life -= dt * 1.25;
-      pings = pings.filter((p) => p.life > 0);
-      for (const r of ripples) {
-        r.r += dt * 70;
-        r.life -= dt * 0.85;
-      }
-      ripples = ripples.filter((r) => r.life > 0);
-      for (const p of bursts) {
-        p.age += dt;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.vy += 130 * dt;
-      }
-      bursts = bursts.filter((p) => p.age < p.life);
-      for (const t of trails) t.life -= dt * 2.2;
-      trails = trails.filter((t) => t.life > 0);
+      for (const t of ticks) t.life -= dt * 1.2;
+      ticks = ticks.filter((t) => t.life > 0);
 
       drawStage();
+      drawCoinDot();
+      for (const k of ORDER) drawBadge(bots[k]);
 
-      for (const p of pings) {
-        ctx.globalAlpha = p.life;
-        ctx.strokeStyle = '#5b8cff';
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, (1 - p.life) * 18 + 3, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-      for (const r of ripples) {
-        ctx.globalAlpha = r.life * 0.9;
-        ctx.strokeStyle = '#22d3ee';
+      // floating green ticks
+      for (const t of ticks) {
+        const x = t.x * w;
+        const y = h * t.y - (1 - t.life) * 12;
+        ctx.globalAlpha = t.life;
+        ctx.strokeStyle = '#00FF66';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.moveTo(x - 4, y);
+        ctx.lineTo(x - 0.5, y + 4);
+        ctx.lineTo(x + 6, y - 5);
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
-      for (const t of trails) {
-        ctx.globalAlpha = t.life;
-        ctx.fillStyle = t.c;
-        ctx.beginPath();
-        ctx.arc(t.x, t.y, 2.2 * t.life, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
 
-      drawCoinToken();
-      for (const k of ORDER) drawSpriteBot(bots[k], dt);
-
-      for (const p of bursts) {
-        const a = 1 - p.age / p.life;
-        ctx.globalAlpha = a;
-        ctx.fillStyle = p.c;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r * a, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-
-      ctx.font = '800 9px Inter, system-ui, sans-serif';
-      ctx.fillStyle = '#4a4a55';
-      ctx.textAlign = 'left';
-      ctx.fillText('TRADING FLOOR', 10, 14);
-
-      // reduced-motion: idle single frame path still draws sprites once per state
       if (reduced) {
-        // slow refresh only
         raf = setTimeout(() => {
           raf = requestAnimationFrame(tick);
-        }, 400);
+        }, 500);
         return;
       }
       raf = requestAnimationFrame(tick);

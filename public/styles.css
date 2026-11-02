@@ -118,7 +118,7 @@ body { min-height: 100dvh; }
 #floorCanvas {
   display: block;
   width: 100%;
-  height: 230px;
+  height: 100px;
   touch-action: none;
 }
 
@@ -128,8 +128,8 @@ body { min-height: 100dvh; }
   margin: 0;
   display: grid; grid-template-columns: repeat(5, 1fr);
   gap: 1px;
-  padding: 4px 4px 6px;
-  background: rgba(0,0,0,0.45);
+  padding: 2px 4px 4px;
+  background: rgba(0,0,0,0.4);
   border-top: 1px solid #15151c;
 }
 .st-cell { text-align: center; min-width: 0; }
