@@ -396,11 +396,17 @@
         const laneBadge = lane
           ? `<span class="tr-lane lane-${lane.toLowerCase()}">${lane}</span>`
           : '';
+        const mode = (it.tradeMode || '').toUpperCase();
+        const modeBadge = mode
+          ? `<span class="tr-mode mode-${mode.toLowerCase()}">${mode}</span>`
+          : '';
+        const arm = it.abArm ? `<span class="tr-arm">${it.abArm}</span>` : '';
+        const rScore = it.runnerScore != null ? `<span class="tr-runner">R${it.runnerScore}</span>` : '';
         const subBits = [agent, size, ago(it.ts)].filter(Boolean).join(' · ');
         return `<div class="trade-row" data-mint="${it.mint || ''}">
           <img src="${img}" alt="" onerror="this.src='${iconFallback(it.symbol)}'"/>
           <div class="tr-mid">
-            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'} ${laneBadge}</div>
+            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'} ${laneBadge}${modeBadge}${arm}${rScore}</div>
             <div class="tr-sub"><span class="tr-agent">${agent}</span><span>${subBits.replace(agent + ' · ', '')}</span></div>
           </div>
           ${right}
@@ -528,6 +534,35 @@
         : '<div class="strategy-row"><span>No lane fills yet</span></div>';
     }
 
+    const armEl = $('armStats');
+    if (armEl) {
+      const byArm = st.byArm || {};
+      const armKeys = ['CONTROL', 'T1', 'T2', 'T3'].filter((k) => byArm[k]);
+      armEl.innerHTML = armKeys.length
+        ? armKeys
+            .map((k) => {
+              const r = byArm[k] || {};
+              const n = r.trades || 0;
+              const exp = n ? (r.pnl || 0) / n : 0;
+              return `<div class="strategy-row"><span class="tr-arm">${k}</span><strong>${r.buys || 0} buys · ${n} closed · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L · E ${money(exp)}</strong></div>`;
+            })
+            .join('')
+        : '<div class="strategy-row"><span>A/B harness waiting for fills</span></div>';
+    }
+    const modeEl = $('modeStats');
+    if (modeEl) {
+      const byMode = st.byMode || {};
+      const modeKeys = ['SCALP', 'RIDE', 'MOON'].filter((k) => byMode[k]);
+      modeEl.innerHTML = modeKeys.length
+        ? modeKeys
+            .map((k) => {
+              const r = byMode[k] || {};
+              return `<div class="strategy-row"><span class="tr-mode mode-${k.toLowerCase()}">${k}</span><strong>${r.trades || 0} · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L</strong></div>`;
+            })
+            .join('')
+        : '<div class="strategy-row"><span>No mode-tagged closes yet</span></div>';
+    }
+
     const by = st.byStrategy || {};
     const keys = Object.keys(by);
     $('strategyStats').innerHTML = keys.length
@@ -573,7 +608,7 @@
     $('whaleDrop').value = s.whaleDropPct ?? 15;
     $('whalePoll').value = s.whalePollMs ?? 20000;
     document.querySelectorAll('.preset-btn').forEach((b) => {
-      b.classList.toggle('active', b.dataset.preset === (s.strategyId || 'balanced'));
+      b.classList.toggle('active', b.dataset.preset === (s.strategyId || 'ab_harness'));
     });
     if (state.killSwitch) $('killBtn').textContent = 'Kill switch ON';
     else $('killBtn').textContent = 'Kill switch';
@@ -680,6 +715,9 @@
       ['Impact', `${round1(pos.impactPct)}%`],
       ['Fill', pos.fillSource || 'paper'],
       ['Strategy', pos.strategyId || state.settings.strategyId],
+      ['A/B arm', pos.abArm || '—'],
+      ['Mode', pos.tradeMode || '—'],
+      ['Runner score', pos.runnerScore != null ? String(pos.runnerScore) : '—'],
     ]
       .map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`)
       .join('');

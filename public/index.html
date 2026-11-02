@@ -7,19 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="JEV — Solana memecoin paper-trading agents. Mode: PAPER. No real money." />
-  <link rel="manifest" href="/manifest.json?v=14a" />
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=14a" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=14a" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=14a" />
+  <link rel="manifest" href="/manifest.json?v=15" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=15" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=15" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=15" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <title>JEV Paper</title>
-  <link rel="stylesheet" href="/styles.css?v=14a" />
+  <link rel="stylesheet" href="/styles.css?v=15" />
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hide">
-    <img src="/img/j-logo.svg?v=14a" alt="JEV" class="lock-logo" />
+    <img src="/img/j-logo.svg?v=15" alt="JEV" class="lock-logo" />
     <h1>JEV</h1>
     <p>Enter passcode to control agents</p>
     <input id="passInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Passcode" />
@@ -30,7 +30,7 @@
   <div id="app">
     <header class="desk-header">
       <div class="desk-brand">
-        <img src="/img/j-mark.svg?v=14a" class="desk-logo" alt="J." />
+        <img src="/img/j-mark.svg?v=15" class="desk-logo" alt="J." />
         <div>
           <div class="desk-title">JEV</div>
           <div class="desk-sub" id="bannerText">Paper desk · memecoins</div>
@@ -96,6 +96,10 @@
       <div class="stats-cards" id="statsCards"></div>
       <h2 class="subhead">By lane</h2>
       <div id="laneStats" class="strategy-stats"></div>
+      <h2 class="subhead">A/B arms (Control vs T1–T3)</h2>
+      <div id="armStats" class="strategy-stats"></div>
+      <h2 class="subhead">By mode (SCALP / RIDE / MOON)</h2>
+      <div id="modeStats" class="strategy-stats"></div>
       <h2 class="subhead">By strategy</h2>
       <div id="strategyStats" class="strategy-stats"></div>
       <h2 class="subhead">Whale Watch</h2>
@@ -113,7 +117,10 @@
       <h2 class="subhead">Strategy preset</h2>
       <div class="preset-row" id="presetRow">
         <button type="button" data-preset="safe" class="preset-btn">Safe</button>
-        <button type="button" data-preset="balanced" class="preset-btn active">Balanced</button>
+        <button type="button" data-preset="balanced" class="preset-btn">Balanced</button>
+        <button type="button" data-preset="ab_harness" class="preset-btn active">A/B Harness</button>
+        <button type="button" data-preset="runner_scalp" class="preset-btn">Scalp</button>
+        <button type="button" data-preset="runner_moon" class="preset-btn">Moon</button>
         <button type="button" data-preset="aggressive" class="preset-btn">Aggressive</button>
       </div>
       <label class="field"><span>Starting balance (next reset)</span><input id="startBal" type="number" min="10" step="1" value="100" /></label>
@@ -177,7 +184,7 @@
       </button>
     </nav>
   </div>
-  <script src="/floor.js?v=14a"></script>
-  <script src="/app.js?v=14a"></script>
+  <script src="/floor.js?v=15"></script>
+  <script src="/app.js?v=15"></script>
 </body>
 </html>

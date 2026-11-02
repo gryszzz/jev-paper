@@ -42,6 +42,21 @@ const {
   bondingProgress,
   hasSocials,
 } = require('./lanes');
+const {
+  MODE_TAG,
+  AB_ARMS,
+  ARM_ORDER,
+  emptyArmStats,
+  bumpArmStats,
+  modeDecision,
+  pickArm,
+  modeRiskProfile,
+  detectSpike,
+  estimateSellImpactPct,
+  flowNegative,
+  buyersFlat,
+} = require('./modes');
+const { runnerBandAction } = require('./runnerScore');
 
 const DS = 'https://api.dexscreener.com';
 
@@ -55,7 +70,7 @@ const DEFAULTS = {
   trailPct: 0.1,
   slippage: 0.02,
   minScore: 70,
-  strategyId: 'balanced',
+  strategyId: 'ab_harness',
   kellyCap: 0.18,
   maxDailyLossPct: 0.15,
   cooldownMs: 5 * 60e3,
@@ -83,6 +98,9 @@ const DEFAULTS = {
   liveMaxDailySpendUsd: 100,
   liveMaxDailyLossUsd: 50,
   liveWalletBalanceCapUsd: 200,
+  abHarness: true,
+  minRunnerScore: 40,
+  riskPerTradePct: 0.002, // 0.20% equity risk budget
 };
 
 function now() {
@@ -179,6 +197,12 @@ function ensureLaneSettings(state) {
   for (const k of ['FRESH', 'GRAD', 'MOVER']) {
     state.stats.byLane[k] = state.stats.byLane[k] || { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 };
   }
+  state.stats.byArm = state.stats.byArm || emptyArmStats();
+  state.stats.byMode = state.stats.byMode || { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
+  if (s.abHarness == null) s.abHarness = true;
+  if (s.minRunnerScore == null) s.minRunnerScore = 40;
+  if (s.riskPerTradePct == null) s.riskPerTradePct = 0.002;
+  state.scalpWatch = state.scalpWatch || [];
   return state;
 }
 
@@ -200,12 +224,14 @@ function emptyStats() {
     sweptUsd: 0,
     byStrategy: {},
     byLane: { FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } },
+    byArm: null,
+    byMode: { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } },
   };
 }
 
 function emptyState(settings = {}) {
   const starting = Number(settings.startingBalance) || DEFAULTS.startingBalance;
-  const merged = applyPreset({ ...DEFAULTS, ...settings, running: true }, settings.strategyId || 'balanced');
+  const merged = applyPreset({ ...DEFAULTS, ...settings, running: true }, settings.strategyId || 'ab_harness');
   return {
     version: 2,
     cash: starting,
@@ -249,6 +275,9 @@ function emptyState(settings = {}) {
       maxNarrativePct: merged.maxNarrativePct ?? DEFAULTS.maxNarrativePct,
       profitSweepPct: merged.profitSweepPct ?? DEFAULTS.profitSweepPct,
       profitSweepTrigger: merged.profitSweepTrigger ?? DEFAULTS.profitSweepTrigger,
+      abHarness: merged.abHarness != null ? merged.abHarness : DEFAULTS.abHarness,
+      minRunnerScore: merged.minRunnerScore != null ? merged.minRunnerScore : DEFAULTS.minRunnerScore,
+      riskPerTradePct: merged.riskPerTradePct != null ? merged.riskPerTradePct : DEFAULTS.riskPerTradePct,
       liveMaxPerTradeUsd: DEFAULTS.liveMaxPerTradeUsd,
       liveMaxDailySpendUsd: DEFAULTS.liveMaxDailySpendUsd,
       liveMaxDailyLossUsd: DEFAULTS.liveMaxDailyLossUsd,
@@ -339,6 +368,13 @@ function migrateState(raw) {
     }
     raw.whaleWatch = raw.whaleWatch || {};
     raw.stats = { ...emptyStats(), ...(raw.stats || {}) };
+    raw.stats.byArm = raw.stats.byArm || emptyArmStats();
+    raw.stats.byMode = raw.stats.byMode || emptyStats().byMode;
+    raw.scalpWatch = raw.scalpWatch || [];
+    if (raw.settings) {
+      if (raw.settings.abHarness == null) raw.settings.abHarness = true;
+      if (raw.settings.minRunnerScore == null) raw.settings.minRunnerScore = 40;
+    }
     raw.ruggedDevs = raw.ruggedDevs || [];
     raw.killSwitch = !!raw.killSwitch;
     raw.mode = 'paper';
@@ -690,6 +726,8 @@ class PaperEngine {
         maxNarrativePct: next.maxNarrativePct,
         profitSweepPct: next.profitSweepPct,
         profitSweepTrigger: next.profitSweepTrigger,
+        abHarness: next.abHarness,
+        minRunnerScore: next.minRunnerScore,
       });
     }
     const keys = [
@@ -697,6 +735,7 @@ class PaperEngine {
       'slippage', 'minScore', 'running', 'kellyCap', 'maxDailyLossPct', 'cooldownMs',
       'whaleDropPct', 'whalePollMs', 'preferGraduating', 'preferEarlyLanes', 'maxMarketCapUsd',
       'lossStreakLimit', 'lossStreakCooldownMs', 'maxNarrativePct', 'profitSweepPct', 'profitSweepTrigger',
+      'abHarness', 'minRunnerScore', 'riskPerTradePct',
       'liveMaxPerTradeUsd', 'liveMaxDailySpendUsd', 'liveMaxDailyLossUsd', 'liveWalletBalanceCapUsd',
     ];
     for (const k of keys) {
@@ -1074,18 +1113,68 @@ class PaperEngine {
       });
       return null;
     }
+    // A/B harness arm + runner mode
+    const arm = settings.abHarness === false ? AB_ARMS.CONTROL : pickArm(state);
+    const rScore = Number(pair.runnerScore) || 0;
+    if (arm.useRunnerGate && rScore < (arm.minRunner || 40)) {
+      addActivity(state, {
+        type: 'skip',
+        symbol: pair.symbol,
+        icon: pair.icon,
+        agent: 'Analyst',
+        detail: `${arm.id} skip · runner ${rScore} < ${arm.minRunner}`,
+        mint: pair.mint,
+        lane,
+        abArm: arm.id,
+        runnerScore: rScore,
+      });
+      return null;
+    }
+    const decision = modeDecision(
+      { score: rScore },
+      { ...pair, buyersPerMin: pair.buyersPerMin },
+      { top10: (pair.rug && (pair.rug.top10Pct || pair.rug.topHolderPct)) || 0, smartHits: (pair.smartMoney && pair.smartMoney.hits) || 0 }
+    );
+    let modeLetter = arm.forcedMode || decision.mode || 'A';
+    if (!arm.useRunnerGate && settings.abHarness === false) {
+      // pure control: no mode tagging beyond RIDE default ladder
+      modeLetter = 'A';
+    }
+    if (arm.id === 'CONTROL') modeLetter = modeLetter || 'A';
+    const modeTag = MODE_TAG[modeLetter] || 'RIDE';
+    const modeRisk = modeRiskProfile(modeLetter, rScore, arm.risk);
+    const laneRisk = laneRiskProfile(lane, settings);
+    // Merge: arm/mode overrides lane for treatment; control keeps lane + settings
+    const risk =
+      arm.id === 'CONTROL'
+        ? { ...laneRisk, spikeExit: false, liquidityShockPct: 0.15, allowReentry: false }
+        : {
+            stopPct: modeRisk.stopPct,
+            trailPct: modeRisk.trailPct,
+            takeProfitLadder: modeRisk.takeProfitLadder || laneRisk.takeProfitLadder,
+            timeStopMs: modeRisk.timeStopMs != null ? modeRisk.timeStopMs : laneRisk.timeStopMs,
+            ...modeRisk,
+          };
+
     let frac = positionSizeFraction(pair.score, settings, {
       priceChangeH1: pair.priceChangeH1,
       liquidity: pair.liquidity,
       narrativeOverExposed: over,
     });
     frac *= laneSizeMult(lane, settings);
+    frac *= arm.sizeMult != null ? arm.sizeMult : 1;
+    if (pair.runnerAction && pair.runnerAction.sizeMult) frac *= pair.runnerAction.sizeMult;
+    // Playbook sizing: cap notional by riskPerTradePct / |stop|
+    const stopAbs = Math.abs(risk.stopPct != null ? risk.stopPct : settings.stopPct || 0.06);
+    const riskBudget = eq * (settings.riskPerTradePct || 0.002);
+    const riskCapFrac = stopAbs > 0 ? riskBudget / (eq * stopAbs) : frac;
+    frac = Math.min(frac, Math.max(0.04, riskCapFrac));
+    // Tighten until expectancy proven
+    frac = Math.min(frac, settings.buyPctMax != null ? Math.min(settings.buyPctMax, 0.15) : 0.15);
     let spend = round(eq * frac, 2);
     spend = Math.min(spend, round(state.cash * 0.95, 2));
-    // Paper still respects live caps as soft training rails
     if (settings.liveMaxPerTradeUsd) spend = Math.min(spend, settings.liveMaxPerTradeUsd);
     if (spend < 2) return null;
-    const risk = laneRiskProfile(lane, settings);
 
     state.agents.executor.status = 'buying';
     state.agents.executor.progress = 0;
@@ -1168,6 +1257,24 @@ class PaperEngine {
       strategyId: settings.strategyId,
       priceHistory: [{ t: now(), price: pair.priceUsd }],
       whaleMeta: { lastPoll: 0, alerted: false },
+      runnerScore: rScore,
+      runnerBand: pair.runnerBand || null,
+      runnerBreakdown: pair.runnerBreakdown || [],
+      abArm: arm.id,
+      tradeMode: modeTag,
+      modeLetter,
+      spikeExit: !!risk.spikeExit,
+      spikeSellPct: risk.spikeSellPct != null ? risk.spikeSellPct : 0.4,
+      liquidityShockPct: risk.liquidityShockPct != null ? risk.liquidityShockPct : 0.1,
+      allowReentry: !!risk.allowReentry,
+      initialsAt2x: !!risk.initialsAt2x,
+      widenStopAfterInitials: !!risk.widenStopAfterInitials,
+      moonbagMinFrac: risk.moonbagMinFrac || 0,
+      initialsTaken: false,
+      spikeSoldAt: null,
+      reentries: 0,
+      flowNegSince: null,
+      buyersFlatSince: null,
     };
 
     state.cash = round(state.cash - netSpend, 4);
@@ -1193,21 +1300,25 @@ class PaperEngine {
     } catch (_) {}
 
     bumpLaneStats(state.stats, lane, { isBuy: true });
+    bumpArmStats(state.stats, arm.id, { isBuy: true });
     addActivity(state, {
       type: 'buy',
       symbol: pair.symbol,
       icon: pair.icon,
       agent: 'Executor',
-      detail: `${lane} · ${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'} · slip ${round(fill.impactPct || 0, 2)}% · ${fill.latencyMs || 0}ms`,
+      detail: `${lane} · ${modeTag} · ${arm.id} · R${rScore} · ${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'}`,
       amountUsd: spend,
       pnl: null,
       pnlPct: null,
       mint: pair.mint,
       lane,
+      abArm: arm.id,
+      tradeMode: modeTag,
+      runnerScore: rScore,
     });
     setBanner(
       state,
-      `Bought ${pair.symbol} [${lane}] · $${spend.toFixed(2)} (${round(frac * 100, 0)}%) · Mode: PAPER`,
+      `Bought ${pair.symbol} [${lane}/${modeTag}/${arm.id}] R${rScore} · $${spend.toFixed(2)} · PAPER`,
       pair.icon
     );
 
@@ -1229,14 +1340,15 @@ class PaperEngine {
   async tickPrices() {
     await this._ready;
     const state = this.state;
-    if (!state.positions.length) {
+    const watchMints = (state.scalpWatch || []).map((w) => w && w.mint).filter(Boolean);
+    if (!state.positions.length && !watchMints.length) {
       pushEquity(state);
       this.persist();
       this.emit();
       return;
     }
 
-    const mints = [...new Set(state.positions.map((p) => p.mint))];
+    const mints = [...new Set(state.positions.map((p) => p.mint).concat(watchMints))];
     let pairs = [];
     try {
       pairs = await this.fetchPairsForMints(mints);
@@ -1275,26 +1387,94 @@ class PaperEngine {
 
       if (!settings.running || state.killSwitch) continue;
 
+      // Liquidity shock — impact-based exit (all modes)
+      const shockLim = pos.liquidityShockPct != null ? pos.liquidityShockPct : 0.1;
+      const impactEst = estimateSellImpactPct(pos, 1);
+      if (impactEst >= shockLim || (pos.liquidity > 0 && live.liquidity > 0 && live.liquidity < pos.liquidity * 0.35)) {
+        closes.push({ pos, reason: 'liq_shock', label: 'Risk liquidity shock', sellPct: 1 });
+        continue;
+      }
+
+      // Flow / buyer time-stops (playbook §5)
+      if (flowNegative(live, pos)) {
+        pos.flowNegSince = pos.flowNegSince || now();
+      } else {
+        pos.flowNegSince = null;
+      }
+      if (buyersFlat(live)) {
+        pos.buyersFlatSince = pos.buyersFlatSince || now();
+      } else {
+        pos.buyersFlatSince = null;
+      }
+      const modeTag = pos.tradeMode || 'RIDE';
+      if (pos.flowNegSince && now() - pos.flowNegSince >= 120000) {
+        const cut = modeTag === 'MOON' ? 0.35 : 0.5;
+        closes.push({ pos, reason: 'flow', label: 'Risk neg-flow cut', sellPct: cut });
+      }
+      if (pos.buyersFlatSince && now() - pos.buyersFlatSince >= 5 * 60e3 && modeTag !== 'MOON') {
+        closes.push({ pos, reason: 'time', label: 'Risk flat-buyers exit', sellPct: 1 });
+        continue;
+      }
+
       if (px <= pos.stopPrice) {
         closes.push({ pos, reason: 'stop', label: 'Risk hard stop', sellPct: 1 });
         continue;
       }
       if (pos.timeStopAt && now() >= pos.timeStopAt) {
-        closes.push({ pos, reason: 'time', label: `Risk time-stop (${pos.lane || 'FRESH'})`, sellPct: 1 });
+        closes.push({ pos, reason: 'time', label: `Risk time-stop (${pos.lane || 'FRESH'}/${modeTag})`, sellPct: 1 });
         continue;
       }
 
-      // laddered take profits
+      // Mode A/B spike partial
+      if (pos.spikeExit && !pos.spikeSoldAt && detectSpike(pos, live)) {
+        const sp = pos.spikeSellPct != null ? pos.spikeSellPct : 0.4;
+        pos.spikeSoldAt = now();
+        // tighten trail after spike
+        pos.trailStop = Math.max(pos.entryPrice, pos.highSinceEntry * (1 - pos.trailPct * 0.5));
+        closes.push({ pos, reason: 'spike', label: `Risk spike TP ${modeTag}`, sellPct: sp });
+        if (pos.allowReentry) {
+          state.scalpWatch = state.scalpWatch || [];
+          state.scalpWatch.push({
+            mint: pos.mint,
+            symbol: pos.symbol,
+            icon: pos.icon,
+            localHigh: pos.highSinceEntry,
+            arm: pos.abArm,
+            runnerScore: pos.runnerScore,
+            mode: pos.tradeMode,
+            sizeUsd: pos.remainingUsdBasis * (1 - sp),
+            expiresAt: now() + 60 * 60e3,
+            reentries: pos.reentries || 0,
+            cooldownUntil: now() + 60000,
+          });
+        }
+      }
+
+      // laddered take profits (+ Mode C initials @ 2x)
       pos.ladder = pos.ladder || [];
       for (const rung of pos.ladder) {
         if (rung.hit) continue;
         if (px >= pos.entryPrice * rung.mult) {
           rung.hit = true;
+          let sellPct = rung.sellPct;
+          // moonbag floor
+          const rem = pos.tokens / Math.max(pos.tokensInitial || pos.tokens, 1e-12);
+          if (pos.moonbagMinFrac && rem - sellPct < pos.moonbagMinFrac) {
+            sellPct = Math.max(0, rem - pos.moonbagMinFrac);
+          }
+          if (sellPct <= 0.01) continue;
+          if (pos.initialsAt2x && rung.mult >= 2 && !pos.initialsTaken) {
+            pos.initialsTaken = true;
+            if (pos.widenStopAfterInitials) {
+              pos.stopPrice = Math.min(pos.stopPrice, pos.entryPrice * 0.5); // effectively disable tight SL
+              pos.trailPct = Math.max(pos.trailPct, 0.25);
+            }
+          }
           closes.push({
             pos,
             reason: 'tp',
-            label: `Risk TP ${rung.mult}x`,
-            sellPct: rung.sellPct,
+            label: `Risk TP ${rung.mult}x ${modeTag}`,
+            sellPct,
             rungMult: rung.mult,
           });
         }
@@ -1307,8 +1487,62 @@ class PaperEngine {
         px <= pos.trailStop &&
         pos.highSinceEntry >= pos.entryPrice * (1 + pos.trailPct * 0.5)
       ) {
-        closes.push({ pos, reason: 'trail', label: 'Risk trailing stop', sellPct: 1 });
+        closes.push({ pos, reason: 'trail', label: `Risk trailing stop ${modeTag}`, sellPct: 1 });
       }
+    }
+
+    // Mode B re-entry: reclaim after spike scalp
+    if (settings.running && !state.killSwitch && state.scalpWatch && state.scalpWatch.length) {
+      const keep = [];
+      for (const w of state.scalpWatch) {
+        if (!w || now() > (w.expiresAt || 0)) continue;
+        if (w.cooldownUntil && now() < w.cooldownUntil) {
+          keep.push(w);
+          continue;
+        }
+        if ((w.reentries || 0) >= 2) continue;
+        if (state.positions.some((p) => p.mint === w.mint)) {
+          keep.push(w);
+          continue;
+        }
+        const live = byMint.get(w.mint);
+        if (!live || !live.priceUsd) {
+          keep.push(w);
+          continue;
+        }
+        const pullback = w.localHigh ? (w.localHigh - live.priceUsd) / w.localHigh : 0;
+        const reclaim = live.priceUsd >= (w.localHigh || 0) * 0.97;
+        const bpmOk = (Number(live.buysM5) || 0) / 5 >= 0.5;
+        const flowOk = (Number(live.buysM5) || 0) >= (Number(live.sellsM5) || 0);
+        if (pullback >= 0.08 && pullback <= 0.22 && reclaim && bpmOk && flowOk && state.cash > 5) {
+          // synthesize a pair for re-buy
+          const pair = {
+            ...live,
+            score: 70,
+            runnerScore: w.runnerScore || 45,
+            runnerBand: 'scalp',
+            lane: live.lane || 'MOVER',
+            breakdown: [{ k: 'reentry', v: 10, note: 'mode-B reclaim' }],
+            narratives: [],
+          };
+          // Force T2-like sizing via temporary arm cursor — tag on activity after buy
+          const before = state.positions.length;
+          const pos = await this.paperBuy(pair);
+          if (pos) {
+            pos.tradeMode = 'SCALP';
+            pos.modeLetter = 'B';
+            pos.abArm = w.arm || 'T2';
+            pos.allowReentry = true;
+            pos.reentries = (w.reentries || 0) + 1;
+            pos.stopPct = -0.08;
+            pos.stopPrice = pos.entryPrice * 0.92;
+            // don't re-queue
+            continue;
+          }
+        }
+        keep.push(w);
+      }
+      state.scalpWatch = keep.slice(-30);
     }
 
     // dedupe full closes
@@ -1335,7 +1569,7 @@ class PaperEngine {
     if (tokensToSell <= 0) return null;
 
     const urgency =
-      reason === 'whale' || reason === 'stop' ? 'high' : reason === 'trail' ? 'normal' : 'normal';
+      reason === 'whale' || reason === 'stop' || reason === 'liq_shock' ? 'high' : reason === 'trail' || reason === 'spike' ? 'normal' : 'normal';
     const fill = await this.adapter.sell(pos.mint, tokensToSell, {
       markPrice: pos.markPrice || pos.entryPrice,
       liquidity: pos.liquidity,
@@ -1413,12 +1647,20 @@ class PaperEngine {
       state.agents.risk.lossStreak = state.stats.lossStreak || 0;
       state.stats.bestTrade = Math.max(state.stats.bestTrade || 0, pnl);
       state.stats.worstTrade = Math.min(state.stats.worstTrade || 0, pnl);
-      const sid = pos.strategyId || state.settings.strategyId || 'balanced';
+      const sid = pos.strategyId || state.settings.strategyId || 'ab_harness';
       state.stats.byStrategy[sid] = state.stats.byStrategy[sid] || { trades: 0, pnl: 0, wins: 0 };
       state.stats.byStrategy[sid].trades += 1;
       state.stats.byStrategy[sid].pnl = round(state.stats.byStrategy[sid].pnl + pnl, 4);
       if (pnl >= 0) state.stats.byStrategy[sid].wins += 1;
       bumpLaneStats(state.stats, pos.lane || LANE.MOVER, { pnl, win: pnl >= 0 });
+      bumpArmStats(state.stats, pos.abArm || 'CONTROL', { pnl, win: pnl >= 0 });
+      const mt = pos.tradeMode || 'RIDE';
+      state.stats.byMode = state.stats.byMode || {};
+      state.stats.byMode[mt] = state.stats.byMode[mt] || { trades: 0, pnl: 0, wins: 0, losses: 0 };
+      state.stats.byMode[mt].trades += 1;
+      state.stats.byMode[mt].pnl = round(state.stats.byMode[mt].pnl + pnl, 4);
+      if (pnl >= 0) state.stats.byMode[mt].wins += 1;
+      else state.stats.byMode[mt].losses += 1;
       if (fullClose) {
         recordClosedTrade(state, {
           breakdown: pos.scoreBreakdown,
@@ -1434,13 +1676,18 @@ class PaperEngine {
     if (fullClose) this.maybeProfitSweep();
 
     const type =
-      reason === 'stop' || reason === 'time'
+      reason === 'stop' || reason === 'time' || reason === 'liq_shock'
         ? 'stopped'
         : reason === 'whale'
           ? 'whale_exit'
-          : reason === 'tp'
+          : reason === 'tp' || reason === 'spike'
             ? 'tp'
-            : 'sell';
+            : reason === 'flow'
+              ? 'sell'
+              : 'sell';
+    const modeBit = pos.tradeMode ? ` · ${pos.tradeMode}` : '';
+    const armBit = pos.abArm ? ` · ${pos.abArm}` : '';
+    const rBit = pos.runnerScore != null ? ` · R${pos.runnerScore}` : '';
     addActivity(state, {
       type,
       symbol: pos.symbol,
@@ -1450,17 +1697,26 @@ class PaperEngine {
         reason === 'whale'
           ? label
           : reason === 'tp'
-            ? `${pos.lane || ''} ladder ${pct * 100}%`.trim()
-            : reason === 'stop'
-              ? `${pos.lane || ''} hard stop`.trim()
-              : reason === 'time'
-                ? `${pos.lane || 'FRESH'} time-stop`
-                : `${pos.lane || ''} trailing stop`.trim(),
+            ? `${pos.lane || ''} ladder ${Math.round(pct * 100)}%${modeBit}${armBit}${rBit}`.trim()
+            : reason === 'spike'
+              ? `${pos.lane || ''} spike ${Math.round(pct * 100)}%${modeBit}${armBit}`.trim()
+              : reason === 'liq_shock'
+                ? `${pos.lane || ''} liq shock${modeBit}${armBit}`.trim()
+                : reason === 'flow'
+                  ? `${pos.lane || ''} neg-flow${modeBit}`.trim()
+                  : reason === 'stop'
+                    ? `${pos.lane || ''} hard stop${modeBit}${armBit}${rBit}`.trim()
+                    : reason === 'time'
+                      ? `${pos.lane || 'FRESH'} time-stop${modeBit}`
+                      : `${pos.lane || ''} trailing stop${modeBit}${armBit}`.trim(),
       amountUsd: proceeds,
       pnl,
       pnlPct,
       mint: pos.mint,
       lane: pos.lane || null,
+      abArm: pos.abArm || null,
+      tradeMode: pos.tradeMode || null,
+      runnerScore: pos.runnerScore != null ? pos.runnerScore : null,
     });
 
     const sign = pnl >= 0 ? '+' : '';

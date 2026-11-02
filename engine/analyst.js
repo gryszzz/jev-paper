@@ -5,6 +5,7 @@ const { applyWeights, ensureWeights } = require('./feedback');
 const { tagCoin, narrativeHeat } = require('./narratives');
 const { smartMoneyOverlap } = require('./smartMoney');
 const { bondingProgress, hasSocials, LANE } = require('./lanes');
+const { runnerScore, runnerBandAction } = require('./runnerScore');
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
@@ -275,9 +276,26 @@ async function scorePair(pair, settings, ctx = {}) {
   if (lane === LANE.FRESH) minScore = Math.max(52, minScore - 8);
   else if (lane === LANE.GRAD) minScore = Math.max(55, minScore - 5);
 
+  const runner = runnerScore(pair, {
+    rug,
+    smartMoney: smMeta,
+    sniper,
+    holdersGrowing: ctx.holdersGrowing,
+    deployerTier: ctx.deployerTier,
+  });
+  const bandAct = runnerBandAction(runner.score);
+  // Gate: analyst minScore AND runner band (unless runner disabled)
+  const requireRunner = settings.abHarness !== false || settings.minRunnerScore != null;
+  const minRunner = settings.minRunnerScore != null ? settings.minRunnerScore : 40;
+  let pass = finalScore >= minScore;
+  if (requireRunner) {
+    if (runner.veto) pass = false;
+    else if (runner.score < minRunner) pass = false;
+  }
+
   return {
     score: finalScore,
-    pass: finalScore >= minScore,
+    pass,
     breakdown: finalBreakdown,
     rug,
     social,
@@ -289,7 +307,13 @@ async function scorePair(pair, settings, ctx = {}) {
     smartMoney: smMeta,
     lane,
     bondingProgress: prog,
+    runnerScore: runner.score,
+    runnerBand: runner.band,
+    runnerBreakdown: runner.breakdown,
+    runnerComponents: runner.components,
+    runnerVeto: runner.veto,
+    runnerAction: bandAct,
   };
 }
 
-module.exports = { scorePair, detectBundledSnipers, buyersPerMinute };
+module.exports = { scorePair, detectBundledSnipers, buyersPerMinute, runnerScore, runnerBandAction };
