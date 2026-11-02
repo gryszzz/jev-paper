@@ -165,51 +165,148 @@
     whale: { name: 'Whale', color: '#22d3ee' },
   };
 
-  /** Original robot mark (not xAI/Grok trademark) — per-agent accent color. */
-  function robotSvg(color) {
-    const c = color || '#a78bfa';
-    return `<svg class="bot" viewBox="0 0 32 32" aria-hidden="true">
-      <g fill="none" stroke="${c}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path class="antenna" d="M16 4v3"/>
-        <circle cx="16" cy="3.2" r="1.4" fill="${c}" stroke="none"/>
-        <rect x="7" y="8" width="18" height="14" rx="5" fill="rgba(20,20,28,0.9)"/>
-        <circle class="eye" cx="12.5" cy="14.5" r="1.7" fill="${c}" stroke="none"/>
-        <circle class="eye r" cx="19.5" cy="14.5" r="1.7" fill="${c}" stroke="none"/>
-        <path d="M12 19h8" opacity=".85"/>
-        <path d="M5 13.5h2M25 13.5h2" opacity=".7"/>
-      </g>
-    </svg>`;
-  }
-
-  function agentBody(key, a, s) {
-    if (!a) return '—';
+  /** Distinct original character art (not xAI/Grok trademark). */
+  function agentSvg(key, a, meta) {
+    const c = meta.color;
     if (key === 'scanner') {
-      const feed = a.wsConnected ? 'WS' : 'DEX';
-      return `<div><strong>${a.pools || 0}</strong> pools · ${feed}</div>
-        <div class="agent-meta">+${a.launches || 0} new · ${a.migrations || 0} grad</div>`;
+      return `<svg class="bot bot-scanner" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="11" fill="none" stroke="${c}" stroke-width="1.2" opacity=".35"/>
+        <circle cx="16" cy="16" r="7" fill="none" stroke="${c}" stroke-width="1" opacity=".25"/>
+        <path class="av-sweep" d="M16 16 L16 5 A11 11 0 0 1 26.5 20 Z" fill="${c}" opacity=".28"/>
+        <circle cx="16" cy="16" r="2.2" fill="${c}"/>
+        <circle class="av-blip" cx="23" cy="9" r="2" fill="${c}" opacity="0"/>
+        <circle class="av-blip" cx="10" cy="22" r="1.5" fill="#39ff8c" opacity="0" style="animation-delay:.35s"/>
+      </svg>`;
     }
     if (key === 'analyst') {
-      const sig = (a.topSignals || []).slice(0, 2).map((x) => x.k).join('·') || '—';
-      return `<div><strong>${a.score ?? '—'}</strong> ${a.symbol || ''}</div>
-        <div class="agent-meta">${a.passed || 0}✓/${a.scored || 0} · ${sig}</div>`;
+      const score = Math.max(0, Math.min(100, Number(a.score) || 0));
+      const circ = 2 * Math.PI * 9;
+      const off = circ * (1 - score / 100);
+      return `<svg class="bot bot-analyst" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="11" fill="#12121a" stroke="${c}" stroke-width="1.2" opacity=".5"/>
+        <circle class="av-gauge" cx="16" cy="16" r="9" fill="none" stroke="${c}" stroke-width="2.4"
+          stroke-dasharray="${circ.toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}"
+          stroke-linecap="round" transform="rotate(-90 16 16)"/>
+        <rect class="av-scan" x="8" y="14" width="16" height="1.4" fill="${c}" opacity=".7"/>
+        <text class="av-think" x="16" y="18.5" text-anchor="middle" fill="#fff" font-size="8" font-weight="700" font-family="Inter,system-ui,sans-serif">${score || '—'}</text>
+      </svg>`;
     }
     if (key === 'executor') {
-      const f = a.lastFill;
-      return `<div>${f ? `${f.symbol} ${money(f.amountUsd)}` : 'idle'}</div>
-        <div class="agent-progress"><i style="width:${a.progress || 0}%"></i></div>
-        <div class="agent-meta">Jito · ${a.lastImpact != null ? a.lastImpact + '%' : '—'} · ${a.lastLatencyMs || '—'}ms</div>`;
+      return `<svg class="bot bot-executor" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="12" rx="3" fill="#12121a" stroke="${c}" stroke-width="1.4"/>
+        <path class="av-bolt" d="M20 6 L15 16 H19 L14 26 L24 14 H19 Z" fill="${c}" opacity=".9"/>
+        <g class="av-ticket" opacity="0">
+          <rect x="18" y="18" width="10" height="7" rx="1.5" fill="#1a1a24" stroke="${c}" stroke-width="1"/>
+          <path d="M20 20.5h6M20 22.5h4" stroke="${c}" stroke-width="1" opacity=".8"/>
+        </g>
+      </svg>`;
     }
     if (key === 'risk') {
       const la = a.lastAction;
-      const streak = a.lossStreak || (s.stats && s.stats.lossStreak) || 0;
-      return `<div>${a.guarding || '—'} · L${streak}</div>
-        <div class="agent-meta">${la ? `${la.reason} ${la.pnl != null ? money(la.pnl) : ''}` : 'TP·trail·sweep'}${s.solReserve ? ' · $' + Number(s.solReserve).toFixed(0) + ' SOL' : ''}</div>`;
+      const mood = la && la.pnl != null ? (la.pnl >= 0 ? 'ok' : 'block') : 'idle';
+      const fill = mood === 'block' ? 'rgba(255,69,58,0.25)' : mood === 'ok' ? 'rgba(57,255,140,0.2)' : 'rgba(255,159,10,0.15)';
+      const stroke = mood === 'block' ? '#ff453a' : mood === 'ok' ? '#39ff8c' : c;
+      return `<svg class="bot bot-risk" viewBox="0 0 32 32" aria-hidden="true" data-mood="${mood}">
+        <path class="av-shield" d="M16 4 L26 8 V16 C26 22 21.5 26.5 16 28 C10.5 26.5 6 22 6 16 V8 Z"
+          fill="${fill}" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M12.5 16.2 L15 18.7 L20 12.8" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+      </svg>`;
+    }
+    if (key === 'whale') {
+      return `<svg class="bot bot-whale" viewBox="0 0 32 32" aria-hidden="true">
+        <g class="av-whale">
+          <ellipse cx="15" cy="18" rx="10" ry="6" fill="#12121a" stroke="${c}" stroke-width="1.3"/>
+          <path d="M24 16 C28 12 29 10 27 8 C25 11 24 13 22 15" fill="none" stroke="${c}" stroke-width="1.3" stroke-linecap="round"/>
+          <circle class="av-ring" cx="11.5" cy="16.5" r="4.2" fill="none" stroke="${c}" stroke-width="1" opacity=".4"/>
+          <circle cx="11.5" cy="16.5" r="2.6" fill="#0a0a10" stroke="${c}" stroke-width="1"/>
+          <circle class="av-eye-pupil" cx="11.5" cy="16.5" r="1.15" fill="${c}"/>
+        </g>
+      </svg>`;
+    }
+    return '';
+  }
+
+  function agentLiveLine(key, a, s) {
+    if (!a) return '—';
+    if (key === 'scanner') {
+      const n = a.launches || a.pools || 0;
+      const last = (a.recent || []).find((x) => x.ok) || (a.recent || [])[0];
+      if (last) return `Found <strong>$${last.symbol}</strong> · ${n} scanned`;
+      return a.wsConnected ? `Scanning <strong>${n}</strong> new coins` : `DEX scan · <strong>${a.pools || 0}</strong> pools`;
+    }
+    if (key === 'analyst') {
+      if (a.symbol != null && a.score != null) return `Score <strong>${a.score}</strong> · $${a.symbol}`;
+      return `Scored <strong>${a.scored || 0}</strong> · ${a.passed || 0} passed`;
+    }
+    if (key === 'executor') {
+      const f = a.lastFill;
+      if (f) {
+        const sol = (Number(f.amountUsd) / 150).toFixed(2); // rough display; USD primary
+        return `Bought <strong>$${f.symbol}</strong> $${Number(f.amountUsd).toFixed(0)}`;
+      }
+      return a.status === 'idle' ? 'Waiting for fill' : String(a.status || 'idle');
+    }
+    if (key === 'risk') {
+      const la = a.lastAction;
+      if (la) {
+        const verb = la.pnl >= 0 ? 'Approved' : 'Blocked';
+        const pnl = la.pnl != null ? ` ${la.pnl >= 0 ? '+' : ''}$${Math.abs(la.pnl).toFixed(2)}` : '';
+        return `${verb} <strong>$${la.symbol}</strong>${pnl}`;
+      }
+      return a.guarding ? `Guarding <strong>$${a.guarding}</strong>` : 'TP · trail · sweep';
     }
     if (key === 'whale') {
       const alert = a.lastAlert;
-      return `<div>${a.watching || 0} pos · SM ${a.smartHits || 0}</div>
-        <div class="agent-meta">${alert ? (alert.detail || '').slice(0, 42) : (a.entrySignals ? a.entrySignals + ' entries' : 'holders')}</div>`;
+      if (alert) return `Alert <strong>$${alert.symbol || ''}</strong> ${(alert.detail || '').slice(0, 28)}`;
+      if (a.entrySignals) return `Smart-money <strong>${a.entrySignals}</strong> entries`;
+      return `Watching <strong>${a.watching || 0}</strong> · eye on whales`;
     }
+    return '';
+  }
+
+  function agentSparkline(key, s) {
+    const act = s.activity || [];
+    const map = {
+      scanner: (it) => /scan|found|launch|new/i.test(it.type || '') || it.agent === 'Scanner',
+      analyst: (it) => /score|pass|analyst/i.test(it.type || '') || it.agent === 'Analyst',
+      executor: (it) => /buy|sell|fill|tp|stop/i.test(it.type || '') || it.agent === 'Executor',
+      risk: (it) => /stop|trail|tp|kill|risk|whale_exit/i.test(it.type || '') || it.agent === 'Risk',
+      whale: (it) => /whale/i.test(it.type || '') || it.agent === 'Whale Watch' || it.agent === 'Whale',
+    };
+    const filt = map[key] || (() => true);
+    let pts = act.filter(filt).slice(0, 16).reverse().map((it) => {
+      if (it.pnl != null) return Number(it.pnl);
+      if (it.amountUsd != null) return Number(it.amountUsd) * 0.05;
+      return 1;
+    });
+    if (pts.length < 2) {
+      // synthesize gentle idle wave from agent counters
+      const a = (s.agents && s.agents[key]) || {};
+      const seed = (a.pools || a.scored || a.trades || a.watching || 3) % 7;
+      pts = Array.from({ length: 10 }, (_, i) => Math.sin((i + seed) * 0.7) * (1 + seed * 0.1));
+    }
+    const w = 100, h = 14, pad = 1;
+    const min = Math.min(...pts), max = Math.max(...pts);
+    const span = max - min || 1;
+    const coords = pts.map((v, i) => {
+      const x = pad + (i / (pts.length - 1)) * (w - pad * 2);
+      const y = pad + (1 - (v - min) / span) * (h - pad * 2);
+      return [x, y];
+    });
+    const d = coords.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+    const last = pts[pts.length - 1];
+    const first = pts[0];
+    const up = last >= first;
+    const stroke = up ? '#39ff8c' : '#ff453a';
+    return `<svg class="agent-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" stroke="${stroke}"/></svg>`;
+  }
+
+  function flashClass(flash) {
+    if (flash === 'profit') return ' flash-profit';
+    if (flash === 'loss') return ' flash-loss';
+    if (flash === 'alert' || flash === 'entry') return ' flash-alert';
+    if (flash === 'pulse') return ' flash-pulse';
+    if (flash === 'block') return ' flash-loss';
     return '';
   }
 
@@ -222,26 +319,28 @@
         const a = state.agents[key] || {};
         const meta = AGENT_META[key];
         const on = a.status && a.status !== 'idle';
-        const flash = a.flash === 'profit' ? ' flash-profit' : '';
-        const active = on ? ' active-agent' : '';
-        return `<div class="agent-card${active}${flash}" data-agent="${key}">
+        const mood = key === 'risk' && a.lastAction && a.lastAction.pnl != null
+          ? (a.lastAction.pnl >= 0 ? 'ok' : 'block')
+          : '';
+        return `<div class="agent-card${on ? ' active-agent' : ''}${flashClass(a.flash)}" data-agent="${key}"${mood ? ` data-mood="${mood}"` : ''}>
           <div class="agent-top">
-            <div class="agent-avatar">${robotSvg(meta.color)}</div>
-            <div>
+            <div class="agent-avatar">${agentSvg(key, a, meta)}</div>
+            <div class="agent-head">
               <div class="agent-name">${meta.name}</div>
               <div class="agent-status ${on ? 'on' : ''}">${a.status || 'idle'}</div>
             </div>
           </div>
-          <div class="agent-body">${agentBody(key, a, state)}</div>
+          <div class="agent-live">${agentLiveLine(key, a, state)}</div>
+          ${agentSparkline(key, state)}
         </div>`;
       })
       .join('');
-    // clear one-shot flash flags client-side after paint
     order.forEach((key) => {
-      if (state.agents[key] && state.agents[key].flash === 'profit') {
+      const f = state.agents[key] && state.agents[key].flash;
+      if (f && f !== 'null') {
         setTimeout(() => {
-          if (state.agents[key]) state.agents[key].flash = null;
-        }, 1000);
+          if (state.agents[key] && state.agents[key].flash === f) state.agents[key].flash = null;
+        }, 900);
       }
     });
   }
@@ -558,7 +657,7 @@
         location.reload();
       });
       navigator.serviceWorker
-        .register('/sw.js?v=5')
+        .register('/sw.js?v=6')
         .then((reg) => {
           const ping = () => reg.update().catch(() => {});
           ping();

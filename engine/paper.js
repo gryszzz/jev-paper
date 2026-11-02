@@ -1197,6 +1197,9 @@ class PaperEngine {
     if (pnl > 0) {
       state.agents.executor.flash = 'profit';
       state.agents.risk.flash = 'profit';
+    } else if (pnl < 0) {
+      state.agents.executor.flash = 'loss';
+      state.agents.risk.flash = 'loss';
     }
 
     pos.tokens = round(pos.tokens - tokensToSell, 8);
