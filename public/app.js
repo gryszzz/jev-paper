@@ -40,8 +40,15 @@
       `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect fill="#222" width="64" height="64" rx="32"/><text x="32" y="38" text-anchor="middle" fill="#9f9" font-size="18" font-family="sans-serif">${(sym || '?').slice(0, 3)}</text></svg>`
     )}`;
 
+  let odoPrimed = false;
   function setOdometer(value) {
     odoTarget = Number(value) || 0;
+    if (!odoPrimed) {
+      odoPrimed = true;
+      odoShown = odoTarget;
+      $('balance').textContent = money(odoShown);
+      return;
+    }
     if (!odoRaf) tickOdo();
   }
   function tickOdo() {
