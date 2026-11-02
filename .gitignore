@@ -4,3 +4,5 @@ data/state.json
 refs/
 *.log
 .env
+shots/
+data/learn/*.json

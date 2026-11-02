@@ -230,13 +230,97 @@ async function socialVelocity(pair) {
   return { score: Math.min(100, score), tx, hasSocial, hasWeb };
 }
 
+
+async function geckoTrendingPools() {
+  try {
+    const d = await fetchJson(`${GT}/networks/solana/trending_pools?page=1`, {
+      ttlMs: 45000,
+      key: 'gt-trend',
+    });
+    return (d.data || [])
+      .map((row) => {
+        const a = row.attributes || {};
+        const mint = (a.base_token_address || a.address || '').split('_').pop();
+        return {
+          mint,
+          symbol: a.name || a.pool_name,
+          liquidity: Number(a.reserve_in_usd || 0),
+          volume24h: Number(a.volume_usd && a.volume_usd.h24) || Number(a.h24_volume_usd || 0),
+          source: 'gecko-trending',
+        };
+      })
+      .filter((r) => r.mint && r.mint.length > 20);
+  } catch (_) {
+    return [];
+  }
+}
+
+/** DexScreener community takeovers + boosted already covered; add token orders / search heat. */
+async function dexscreenerTrending() {
+  const out = [];
+  try {
+    const d = await fetchJson(`${DS}/token-boosts/latest/v1`, { ttlMs: 30000, key: 'ds-boost-latest' });
+    for (const b of d || []) {
+      if (b.chainId === 'solana' && b.tokenAddress) {
+        out.push({ mint: b.tokenAddress, symbol: b.description || b.amount, source: 'ds-boost-latest', icon: b.icon });
+      }
+    }
+  } catch (_) {}
+  try {
+    // Free search heat for solana trending-ish queries
+    for (const q of ['solana trending', 'pump.fun']) {
+      const d = await fetchJson(`${DS}/latest/dex/search?q=${encodeURIComponent(q)}`, {
+        ttlMs: 40000,
+        key: `ds-trend-${q}`,
+      });
+      for (const p of (d.pairs || []).slice(0, 12)) {
+        if (p.chainId !== 'solana') continue;
+        const mint = p.baseToken && p.baseToken.address;
+        if (!mint) continue;
+        out.push({
+          mint,
+          symbol: p.baseToken.symbol,
+          liquidity: Number(p.liquidity && p.liquidity.usd) || 0,
+          volume24h: Number(p.volume && p.volume.h24) || 0,
+          source: 'ds-search-heat',
+          telegram: ((p.info && p.info.socials) || []).find((s) => /telegram/i.test(s.type || s.url || '')),
+        });
+      }
+    }
+  } catch (_) {}
+  return out;
+}
+
+/** Free telegram/alpha proxy: extract telegram links from DexScreener socials on pairs. */
+function telegramMentionsFromPairs(pairs = []) {
+  const hits = [];
+  for (const p of pairs) {
+    const socials = p.socials || (p.info && p.info.socials) || [];
+    for (const s of socials) {
+      const url = String(s.url || s.link || '');
+      if (/t\.me|telegram/i.test(url) || /telegram/i.test(String(s.type || ''))) {
+        hits.push({
+          mint: p.mint || (p.baseToken && p.baseToken.address),
+          symbol: p.symbol || (p.baseToken && p.baseToken.symbol),
+          telegram: url || s.type,
+          source: 'dex-telegram',
+        });
+      }
+    }
+  }
+  return hits;
+}
+
 module.exports = {
   pumpNewTokens,
   pumpGraduating,
   realtimeLaunches,
   realtimeStats,
   dexscreenerDiscover,
+  dexscreenerTrending,
   geckoNewPools,
+  geckoTrendingPools,
+  telegramMentionsFromPairs,
   rugcheck,
   socialVelocity,
   DS,

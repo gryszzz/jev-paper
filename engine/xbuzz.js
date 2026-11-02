@@ -17,9 +17,15 @@ const { fetchJson } = require('./http');
 const X_BEARER = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
 const APIFY_TOKEN = process.env.APIFY_TOKEN || '';
 const APIFY_ACTOR = process.env.APIFY_X_ACTOR || 'apidojo/tweet-scraper';
+const KOL_HANDLES = (process.env.X_KOL_HANDLES || 'elonmusk,a1lon9,solana,pumpdotfun,whale_alert,lookonchain,CryptoDonAlt,Ansem')
+  .split(',')
+  .map((s) => s.trim().replace(/^@/, ''))
+  .filter(Boolean);
+
 
 const store = {
   byTicker: {}, // symbol -> { mentions1h, mentions24h, kolPosts, velocity, lastAt, samples }
+  tweets: [], // recent KOL / search tweets for tweet-to-launch
   enabled: !!(X_BEARER || APIFY_TOKEN),
   mode: X_BEARER ? 'x-api' : APIFY_TOKEN ? 'apify' : 'stub',
   lastError: null,
@@ -27,6 +33,7 @@ const store = {
   lastQuery: null,
   apiCalls: 0,
   signals: 0,
+  authFails: 0,
 };
 
 function clamp(n, a, b) {
@@ -63,6 +70,22 @@ function ingestMentions({ symbol, mint, mentions = 1, kol = false, ts = Date.now
   row.lastAt = ts;
   if (mentions > 0) store.signals += 1;
   return row;
+}
+
+function pushTweet(tw) {
+  if (!tw || !tw.text) return;
+  store.tweets.unshift({
+    text: String(tw.text).slice(0, 280),
+    user: tw.user || tw.author || null,
+    ts: tw.ts || Date.now(),
+    kol: !!tw.kol,
+  });
+  if (store.tweets.length > 100) store.tweets = store.tweets.slice(0, 100);
+}
+
+function recentTweets(maxAgeMs = 30 * 60e3) {
+  const cut = Date.now() - maxAgeMs;
+  return store.tweets.filter((t) => t.ts >= cut);
 }
 
 function decay() {
@@ -148,17 +171,20 @@ async function pollOneCashtag(symbol, mint) {
   } catch (e) {
     store.lastError = e.message;
     store.lastRunAt = Date.now();
+    if (/401|403/.test(String(e.message))) store.authFails = (store.authFails || 0) + 1;
     return null;
   }
 }
 
 /** Apify actor run (rate-limited). */
-async function triggerApifyScrape(tickers = []) {
+async function triggerApifyScrape(tickers = [], opts = {}) {
   if (!APIFY_TOKEN || !tickers.length) return { ok: false, reason: 'APIFY_TOKEN unset or no tickers' };
   const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/runs?token=${APIFY_TOKEN}`;
   try {
     const body = JSON.stringify({
       searchTerms: tickers.slice(0, 5).map((t) => `$${sanitizeTicker(t)}`),
+      twitterHandles: opts.kol ? KOL_HANDLES.slice(0, 5) : undefined,
+      maxItems: 30,
       maxTweets: 30,
       addUserInfo: true,
     });
@@ -195,8 +221,8 @@ async function tickBuzz(symbols = []) {
     .slice(0, 8);
   if (!items.length) return stats();
 
-  if (X_BEARER) {
-    // Round-robin: pick next ticker we haven't refreshed in 3m
+  const xAuthBroken = store.authFails >= 2;
+  if (X_BEARER && !xAuthBroken) {
     const now = Date.now();
     let pick = items.find((it) => {
       const row = store.byTicker[sanitizeTicker(it.symbol).toUpperCase()];
@@ -204,13 +230,46 @@ async function tickBuzz(symbols = []) {
     });
     if (!pick) pick = items[0];
     await pollOneCashtag(pick.symbol, pick.mint);
-    return stats();
+    // Also filtered KOL search once / 10m when bearer works
+    if (now - (store._kolAt || 0) > 600000) {
+      store._kolAt = now;
+      await pollKolFiltered().catch(() => {});
+    }
+    if (store.authFails < 2) return stats();
   }
 
   if (APIFY_TOKEN && Date.now() - (store.lastRunAt || 0) > 30 * 60e3) {
-    await triggerApifyScrape(items.map((i) => i.symbol));
+    store.mode = 'apify';
+    await triggerApifyScrape(items.map((i) => i.symbol), { kol: true });
   }
   return stats();
+}
+
+/** Filtered search on watched KOL accounts (X API). */
+async function pollKolFiltered() {
+  if (!X_BEARER || !KOL_HANDLES.length) return null;
+  const from = KOL_HANDLES.slice(0, 6).map((h) => `from:${h}`).join(' OR ');
+  const q = `(${from}) (coin OR solana OR \$OR pump OR meme) -is:retweet`;
+  const url = `https://api.twitter.com/2/tweets/search/recent?max_results=10&query=${encodeURIComponent(q)}&tweet.fields=created_at,author_id,text`;
+  try {
+    const d = await fetchJson(url, {
+      ttlMs: 120000,
+      key: 'x-kol-filtered',
+      headers: { Authorization: `Bearer ${X_BEARER}` },
+      timeoutMs: 12000,
+    });
+    store.apiCalls += 1;
+    store.lastError = null;
+    for (const tw of d.data || []) {
+      pushTweet({ text: tw.text, user: tw.author_id, ts: tw.created_at ? Date.parse(tw.created_at) : Date.now(), kol: true });
+      store.signals += 1;
+    }
+    return d.data || [];
+  } catch (e) {
+    store.lastError = e.message;
+    if (/401|403/.test(String(e.message))) store.authFails = (store.authFails || 0) + 1;
+    return null;
+  }
 }
 
 function stats() {
@@ -236,6 +295,10 @@ module.exports = {
   xBuzzScore,
   tickBuzz,
   triggerApifyScrape,
+  recentTweets,
+  pushTweet,
+  pollKolFiltered,
   stats,
   store,
+  KOL_HANDLES,
 };

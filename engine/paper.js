@@ -12,6 +12,9 @@ const {
   rugcheck,
   realtimeLaunches,
   realtimeStats,
+  dexscreenerTrending,
+  geckoTrendingPools,
+  telegramMentionsFromPairs,
 } = require('./sources');
 const { scorePair } = require('./analyst');
 const { PRESETS, applyPreset, positionSizeFraction } = require('./strategies');
@@ -26,7 +29,7 @@ const {
   topAddresses,
   smartMoneyOverlap,
 } = require('./smartMoney');
-const { tagCoin, updateHeatMap, exposureByNarrative } = require('./narratives');
+const { tagCoin, updateHeatMap, exposureByNarrative, detectClusters, scoreNarrativeFit } = require('./narratives');
 const { runMiner, minerStats, feedbackFromPaper } = require('./smartWalletMiner');
 const xbuzz = require('./xbuzz');
 const { latencyStats: rpcLatencyStats } = require('./rpc');
@@ -60,6 +63,9 @@ const {
   buyersFlat,
 } = require('./modes');
 const { runnerBandAction } = require('./runnerScore');
+const learn = require('./learn');
+const eyes = require('./eyes');
+const viral = require('./viral');
 
 const DS = 'https://api.dexscreener.com';
 
@@ -695,6 +701,14 @@ class PaperEngine {
       smartMoneyTop: (ensureRegistry(s).wallets || []).slice().sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,8),
       smartWalletMiner: minerStats(s),
       xBuzz: xbuzz.stats(),
+      viral: viral.stats(),
+      learn: learn.stats(this.state),
+      eyes: eyes.status({
+        learn: learn.stats(this.state),
+        telegram: this.state._telegramMentions || null,
+        dexscreener: { trending: !!(this.state._eyesMeta && this.state._eyesMeta.dsTrending) },
+        gecko: { trending: !!(this.state._eyesMeta && this.state._eyesMeta.geckoTrending) },
+      }),
       dataLatency: {
         realtime: realtimeStats(),
         rpc: rpcLatencyStats(),
@@ -705,7 +719,7 @@ class PaperEngine {
       },
       realtime: realtimeStats(),
       disclaimer:
-        'PAPER ONLY — Mode: PAPER. Free data: PumpPortal WS + public RPC rotate + DexScreener/Gecko/Jupiter. Jito+MEV sim fills. LIVE_ENABLED=false. Optional free-tier HELIUS_API_KEY / APIFY_TOKEN / SUPABASE_*.',
+        'PAPER ONLY — Mode: PAPER. Eyes: PumpPortal+DexScreener+Gecko+Jupiter+X/Apify+Reddit/Trends+Telegram proxy. Learner nightly. LIVE_ENABLED=false.',
     };
   }
 
@@ -746,6 +760,13 @@ class PaperEngine {
       this._minerTimer = setInterval(() => {
         this.tickMiner().catch((e) => console.error('miner', e.message));
       }, 180000);
+      this._learnTimer = setInterval(() => {
+        this.tickLearn().catch((e) => console.error('learn', e.message));
+      }, 60000);
+      this._viralTimer = setInterval(() => {
+        viral.tickViral().catch((e) => console.error('viral', e.message));
+      }, 180000);
+      viral.tickViral().catch(() => {});
     });
   }
 
@@ -754,7 +775,9 @@ class PaperEngine {
     if (this._priceTimer) clearInterval(this._priceTimer);
     if (this._whaleTimer) clearInterval(this._whaleTimer);
     if (this._minerTimer) clearInterval(this._minerTimer);
-    this._scanTimer = this._priceTimer = this._whaleTimer = this._minerTimer = null;
+    if (this._learnTimer) clearInterval(this._learnTimer);
+    if (this._viralTimer) clearInterval(this._viralTimer);
+    this._scanTimer = this._priceTimer = this._whaleTimer = this._minerTimer = this._learnTimer = this._viralTimer = null;
     try {
       if (this._tradeUnsub) this._tradeUnsub();
       feed.stop();
@@ -782,6 +805,10 @@ class PaperEngine {
       if (buzzTargets.length >= 6) break;
     }
     try { await xbuzz.tickBuzz(buzzTargets); } catch (_) {}
+    try {
+      const tweets = xbuzz.recentTweets(45 * 60e3);
+      viral.ingestXTrendKeywords(tweets.map((tw) => tw.text));
+    } catch (_) {}
     // refresh free RPC wallet watch with latest top wallets
     try {
       const tops = topAddresses(ensureRegistry(state), 12);
@@ -818,7 +845,51 @@ class PaperEngine {
       // Mark mint as smart-entry candidate for next scan
       state._smartEntryMints = state._smartEntryMints || {};
       state._smartEntryMints[mint] = { wallet, score: smart.score, ts: now() };
+      state._whaleBuyEvents = state._whaleBuyEvents || [];
+      state._whaleBuyEvents.unshift({ mint, wallet, ts: now(), symbol: msg.symbol });
+      if (state._whaleBuyEvents.length > 200) state._whaleBuyEvents = state._whaleBuyEvents.slice(0, 200);
     }
+  }
+
+  async tickLearn() {
+    const state = this.state;
+    if (!state) return;
+    try {
+      // Outcome stamps from latest prices
+      const priceByMint = {};
+      for (const p of state.positions || []) {
+        if (p.mint && p.lastPrice) priceByMint[p.mint] = p.lastPrice;
+      }
+      for (const p of state.scanned || []) {
+        if (p.mint && p.priceUsd) priceByMint[p.mint] = p.priceUsd;
+      }
+      learn.tickOutcomes(state, priceByMint);
+      // Nightly retrain window: 04:00–05:00 America/New_York-ish (box is ET)
+      const d = new Date();
+      const hour = d.getHours();
+      if (hour === 4) {
+        const L = learn.ensureLearn(state);
+        if (!L.lastTrainAt || Date.now() - L.lastTrainAt > 20 * 3600e3) {
+          const r = learn.nightlyRetrain(state);
+          if (r && r.promoted) {
+            addActivity(state, { type: 'learn', symbol: '—', agent: 'Analyst', detail: `Promoted weights v${r.version} · beat CONTROL` });
+          } else if (r && r.ok) {
+            addActivity(state, { type: 'learn', symbol: '—', agent: 'Analyst', detail: `Retrain v${r.version} held (no promote)` });
+          }
+          learn.growSmartWalletsFromWinners(state, {
+            promoteFn: (addr, meta) => {
+              try {
+                const reg = ensureRegistry(state);
+                recordWalletEvent(reg, addr, { side: 'buy', note: meta && meta.note });
+              } catch (_) {}
+            },
+          });
+        }
+      }
+    } catch (e) {
+      try { learn.ensureLearn(state).lastError = e.message; } catch (_) {}
+    }
+    this.persist();
   }
 
   maybeProfitSweep() {
@@ -1015,12 +1086,19 @@ class PaperEngine {
       state.agents.scanner.migrations = rtStats.migrations || 0;
       state.agents.scanner.feed = rtStats.connected ? 'pumpportal+dex' : 'dex-fallback';
 
-      const [ds, pumpNew, pumpGrad, gecko] = await Promise.all([
+            const [ds, pumpNew, pumpGrad, gecko, dsTrend, geckoTrend] = await Promise.all([
         dexscreenerDiscover().catch(() => ({ mints: [], icons: new Map(), meta: new Map() })),
         pumpNewTokens().catch(() => []),
         pumpGraduating().catch(() => []),
         geckoNewPools().catch(() => []),
+        dexscreenerTrending().catch(() => []),
+        geckoTrendingPools().catch(() => []),
       ]);
+      state._eyesMeta = {
+        dsTrending: Array.isArray(dsTrend) ? dsTrend.length : 0,
+        geckoTrending: Array.isArray(geckoTrend) ? geckoTrend.length : 0,
+        at: now(),
+      };
 
       const mintSet = new Set(ds.mints || []);
       const icons = ds.icons || new Map();
@@ -1058,6 +1136,13 @@ class PaperEngine {
         });
       }
       for (const g of gecko) if (g.mint) mintSet.add(g.mint);
+      for (const row of dsTrend || []) {
+        const m = row.mint || row.tokenAddress;
+        if (m) { mintSet.add(m); if (row.icon) icons.set(m, row.icon); }
+      }
+      for (const row of geckoTrend || []) {
+        if (row.mint) mintSet.add(row.mint);
+      }
       // Boost smart-money entry mints
       for (const m of Object.keys(state._smartEntryMints || {})) mintSet.add(m);
 
@@ -1100,6 +1185,44 @@ class PaperEngine {
         p._laneInfo = info;
         if (info.progress != null && p.bondingProgress == null) p.bondingProgress = info.progress;
         p.buyersPerMin = (Number(p.buysM5) || 0) / 5;
+      }
+
+      // Eyes: telegram proxy mentions, copycat groups, whale clusters, viral + narrative
+      try {
+        state._telegramMentions = telegramMentionsFromPairs(pairs);
+      } catch (_) { state._telegramMentions = []; }
+      const copyMap = eyes.annotateCopycats(pairs);
+      const whaleScores = eyes.whaleClusterScore(state._whaleBuyEvents || []);
+      state._themeFirstSeen = state._themeFirstSeen || {};
+      const clusters = detectClusters(pairs.slice(0, 60));
+      const recentTw = (() => { try { return xbuzz.recentTweets(30 * 60e3); } catch (_) { return []; } })();
+      for (const p of pairs) {
+        const cc = copyMap.get(p.mint) || { copycatPenalty: 0, isOriginal: true, clones: 1 };
+        p.copycatPenalty = cc.copycatPenalty || 0;
+        p.isOriginal = !!cc.isOriginal;
+        p.copycatClones = cc.clones || 1;
+        const wc = whaleScores.get(p.mint);
+        p.whaleCluster = wc ? wc.whaleCluster : 0;
+        const vm = viral.matchViral(p);
+        p.viralMeme = vm.viralMeme || 0;
+        p.viralFirstMover = vm.firstMover || 0;
+        p.viralNote = vm.note;
+        const nf = scoreNarrativeFit(p, { heatMap: state.heatMap || {}, clusters, themeFirstSeen: state._themeFirstSeen });
+        p.narrativeFit = nf.narrativeFit || 0;
+        p.firstMover = Math.max(nf.firstMover || 0, p.viralFirstMover || 0);
+        p.narratives = nf.tags || tagCoin(p);
+        const ttl = eyes.tweetToLaunchScore(p, recentTw);
+        p.tweetToLaunch = ttl.tweetToLaunch || 0;
+        p.tweetToLaunchNote = ttl.note;
+        // Soft score nudges (analyst still owns hard gates)
+        let eyesBoost = 0;
+        eyesBoost += Math.min(8, (p.viralMeme || 0) * 0.35);
+        eyesBoost += Math.min(6, (p.narrativeFit || 0) * 0.3);
+        eyesBoost += Math.min(8, (p.tweetToLaunch || 0) * 0.4);
+        eyesBoost += Math.min(7, (p.whaleCluster || 0) * 0.35);
+        eyesBoost += Math.min(5, (p.firstMover || 0) * 0.25);
+        eyesBoost -= Math.min(12, (p.copycatPenalty || 0) * 0.5);
+        p._eyesBoost = Math.round(eyesBoost);
       }
 
       state.agents.scanner.pools = pairs.length;
@@ -1242,7 +1365,27 @@ class PaperEngine {
           r.breakdown = [...(r.breakdown || []), { k: 'smartMoney', v: 8, note: 'WS buy signal' }];
           r.pass = r.score >= (settings.minScore || 70);
         }
-        scored.push({ ...p, ...r, narratives: r.narratives || tagCoin(p) });
+        // Eyes + learned bonus
+        if (p._eyesBoost) {
+          r.score = Math.max(0, Math.min(100, r.score + p._eyesBoost));
+          r.breakdown = [...(r.breakdown || []), { k: 'eyes', v: p._eyesBoost, note: `v${p.viralMeme||0}/n${p.narrativeFit||0}/t${p.tweetToLaunch||0}/w${p.whaleCluster||0}/c-${p.copycatPenalty||0}` }];
+        }
+        const feat = learn.extractFeatures(p, {
+          xBuzzScore: xb.score,
+          narrativeFit: p.narrativeFit,
+          firstMover: p.firstMover,
+          tweetToLaunch: p.tweetToLaunch,
+          copycatPenalty: p.copycatPenalty,
+          whaleCluster: p.whaleCluster,
+          viralMeme: p.viralMeme,
+        });
+        const lb = learn.learnedBonus(state, feat);
+        if (lb) {
+          r.score = Math.max(0, Math.min(100, r.score + lb));
+          r.breakdown = [...(r.breakdown || []), { k: 'learn', v: lb, note: 'promoted weights' }];
+        }
+        r.pass = r.score >= (settings.minScore || 70);
+        scored.push({ ...p, ...r, narratives: p.narratives || r.narratives || tagCoin(p), features: feat });
       }
       scored.sort((a, b) => b.score - a.score);
       state.scored = scored.slice(0, 15);
@@ -1313,9 +1456,64 @@ class PaperEngine {
       } else if (candidates.length && state.positions.length < settings.maxPositions && state.cash > 5) {
         const pick = candidates[0];
         state.agents.analyst.passed = (state.agents.analyst.passed || 0) + 1;
+        try {
+          learn.logCandidate(state, {
+            mint: pick.mint,
+            symbol: pick.symbol,
+            decision: 'buy',
+            score: pick.score,
+            runnerScore: pick.runnerScore,
+            abArm: pick.abArm,
+            lane: pick.lane,
+            price: pick.priceUsd,
+            pair: pick,
+            features: pick.features,
+            ctx: {
+              xBuzzScore: pick.xBuzzScore,
+              narrativeFit: pick.narrativeFit,
+              firstMover: pick.firstMover,
+              tweetToLaunch: pick.tweetToLaunch,
+              copycatPenalty: pick.copycatPenalty,
+              whaleCluster: pick.whaleCluster,
+              viralMeme: pick.viralMeme,
+            },
+          });
+          // Log nearby skips for contrast
+          for (const sk of scored.slice(0, 8)) {
+            if (sk.mint === pick.mint) continue;
+            learn.logCandidate(state, {
+              mint: sk.mint,
+              symbol: sk.symbol,
+              decision: 'skip',
+              reason: sk.pass ? 'not-picked' : 'fail-gates',
+              score: sk.score,
+              runnerScore: sk.runnerScore,
+              lane: sk.lane,
+              price: sk.priceUsd,
+              pair: sk,
+              features: sk.features,
+            });
+          }
+        } catch (_) {}
         await this.paperBuy(pick);
       } else {
         state.agents.analyst.status = top ? (top.pass ? 'passed' : 'idle') : 'idle';
+        try {
+          for (const sk of scored.slice(0, 6)) {
+            learn.logCandidate(state, {
+              mint: sk.mint,
+              symbol: sk.symbol,
+              decision: 'skip',
+              reason: !sk.pass ? 'fail-gates' : (state.positions.length >= settings.maxPositions ? 'max-pos' : 'no-slot'),
+              score: sk.score,
+              runnerScore: sk.runnerScore,
+              lane: sk.lane,
+              price: sk.priceUsd,
+              pair: sk,
+              features: sk.features,
+            });
+          }
+        } catch (_) {}
       }
 
       this.maybeProfitSweep();
