@@ -15,11 +15,16 @@
  * with performance pruning left to runMiner's rank/cap + paper feedback.
  */
 
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const { fetchJson } = require('./http');
 const { ensureRegistry, rankWallets, isSmartWallet } = require('./smartMoney');
 
+const execFileAsync = promisify(execFile);
 const GMGN_BASE = 'https://gmgn.ai/defi/quotation/v1/rank/sol/wallets';
 const FOMORADAR_BASE = 'https://fomoradar.io/v2';
+const GMGN_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const STATS = {
   lastRunAt: 0,
@@ -73,9 +78,42 @@ function promote(reg, address, { label = 'copy', boost = 2, note } = {}) {
 function gmgnHeaders() {
   return {
     Accept: 'application/json',
-    'User-Agent': 'Mozilla/5.0 (compatible; JEV-Paper/1.0)',
+    'User-Agent': GMGN_UA,
     Referer: 'https://gmgn.ai/',
   };
+}
+
+/** Node fetch is TLS-fingerprinted by GMGN (403); curl works. */
+async function fetchGmgnJson(url) {
+  try {
+    return await fetchJson(url, {
+      ttlMs: 0,
+      key: `gmgn-node-${Date.now()}`,
+      headers: gmgnHeaders(),
+      timeoutMs: 12000,
+    });
+  } catch (e) {
+    // curl fallback — same host, browser UA
+    const { stdout } = await execFileAsync(
+      'curl',
+      [
+        '-sS',
+        '--max-time',
+        '15',
+        '-A',
+        GMGN_UA,
+        '-H',
+        'Accept: application/json',
+        '-H',
+        'Referer: https://gmgn.ai/',
+        url,
+      ],
+      { maxBuffer: 8 * 1024 * 1024 }
+    );
+    const d = JSON.parse(stdout || '{}');
+    if (d && (d.code === 0 || d.data)) return d;
+    throw new Error(`gmgn curl empty/err: ${(stdout || '').slice(0, 120)}`);
+  }
 }
 
 /**
@@ -88,12 +126,7 @@ async function fetchGmgnLeaders(opts = {}) {
   const limit = opts.limit || 40;
   const orderby = period === '1d' ? 'pnl_1d' : period === '30d' ? 'pnl_30d' : 'pnl_7d';
   const url = `${GMGN_BASE}/${period}?tag=${encodeURIComponent(tag)}&orderby=${orderby}&direction=desc`;
-  const d = await fetchJson(url, {
-    ttlMs: 10 * 60e3,
-    key: `gmgn-wallets-${period}-${tag}`,
-    headers: gmgnHeaders(),
-    timeoutMs: 15000,
-  });
+  const d = await fetchGmgnJson(url);
   const rank = (d && d.data && d.data.rank) || [];
   return rank.slice(0, limit).map((r, i) => {
     const pnlKey = period === '1d' ? 'pnl_1d' : period === '30d' ? 'pnl_30d' : 'pnl_7d';
