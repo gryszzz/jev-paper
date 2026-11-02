@@ -196,11 +196,17 @@ async function scorePair(pair, settings, ctx = {}) {
   const hasAnyTraction = tr0 >= 2 || buysM5n >= 2 || volM5n >= 200 || bpmN >= 0.4 ||
     Number(pair.whaleCluster || 0) >= 1 || Number(pair.bondingProgress || 0) >= 0.02;
   if (neverSeen && qualityOk && (lane === LANE.FRESH || pair.source === 'pumpportal' || pair.fromPump)) {
-    let nov = hasAnyTraction ? 22 : 8; // bare novelty without buyers is weak
-    if (tr0 >= 8) nov = 26;
-    else if (tr0 >= 4) nov = 24;
-    score += nov;
-    breakdown.push({ k: 'novelty', v: nov, note: hasAnyTraction ? 'brand-new FRESH + traction' : 'new but thin traction' });
+    // Cap novelty so it cannot carry a pass alone (max 12; traction earns the rest)
+    let nov = 0;
+    if (tr0 >= 8 || (buysM5n >= 12 && volM5n >= 2000)) nov = 12;
+    else if (hasAnyTraction) nov = 8;
+    else nov = 0; // zero buyers/vol → no novelty points
+    if (nov) {
+      score += nov;
+      breakdown.push({ k: 'novelty', v: nov, note: nov >= 12 ? 'new + strong traction' : 'new + some traction' });
+    } else {
+      breakdown.push({ k: 'novelty', v: 0, note: 'no novelty without buyers/vol' });
+    }
   } else if (neverSeen && qualityOk && lane === LANE.GRAD) {
     score += 14;
     breakdown.push({ k: 'novelty', v: 14, note: 'never-traded grad' });
@@ -349,9 +355,9 @@ async function scorePair(pair, settings, ctx = {}) {
   }
 
   finalScore = clamp(Math.round(finalScore), 0, 100);
-  // Lane-specific minScore: FRESH much lower — edge decays in minutes
+  // Lane-specific minScore: FRESH softer but not novelty-carried
   let minScore = settings.minScore || 70;
-  if (lane === LANE.FRESH) minScore = Math.max(42, minScore - 16);
+  if (lane === LANE.FRESH) minScore = Math.max(48, minScore - 12);
   else if (lane === LANE.GRAD) minScore = Math.max(50, minScore - 8);
 
   const runner = runnerScore(pair, {
@@ -366,13 +372,26 @@ async function scorePair(pair, settings, ctx = {}) {
   // Gate: analyst minScore AND runner band (unless runner disabled)
   const requireRunner = settings.abHarness !== false || settings.minRunnerScore != null;
   let minRunner = settings.minRunnerScore != null ? settings.minRunnerScore : 40;
-  // FRESH curve coins often lack DS volume → don't let runner starve novelty entries
-  if (lane === LANE.FRESH) minRunner = Math.max(18, minRunner - 18);
+  // FRESH: keep a real runner floor — no free pass for empty curve dust
+  if (lane === LANE.FRESH) minRunner = Math.max(28, minRunner - 10);
   else if (lane === LANE.GRAD) minRunner = Math.max(28, minRunner - 8);
   let pass = finalScore >= minScore;
   if (requireRunner) {
     if (runner.veto && lane !== LANE.FRESH) pass = false;
     else if (runner.score < minRunner) pass = false;
+  }
+  // Novelty cannot carry alone: score excluding novelty must clear a floor
+  if (lane === LANE.FRESH || pair.fromPump) {
+    const novPts = (finalBreakdown || []).filter((b) => b && b.k === 'novelty').reduce((s, b) => s + (Number(b.v) || 0), 0);
+    const scoreExNov = finalScore - novPts;
+    const floorExNov = Math.max(40, minScore - 8);
+    if (scoreExNov < floorExNov) pass = false;
+    // Hard traction for pass (mirrors laneGates)
+    const u = Number(pair.uniqueBuyers || pair.buyersM5 || pair.buyers || 0) || 0;
+    const b5 = Number(pair.buysM5) || 0;
+    const v5 = Math.max(Number(pair.volumeM5) || 0, (Number(pair.volumeH1) || 0) * 0.35);
+    if (u < 3 && b5 < 5) pass = false;
+    if (v5 < 500) pass = false;
   }
 
   return {
