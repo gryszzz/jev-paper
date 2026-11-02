@@ -1,13 +1,13 @@
-/* JEV Trading Floor v14 — tiny free-standing agents, no badges/boxes */
+/* JEV Trading Floor v19 — crisp vector agents + state FX (no cards/rings) */
 (function (global) {
   'use strict';
 
   const META = {
-    scanner: { name: 'Scanner', color: '#5b8cff' },
-    analyst: { name: 'Analyst', color: '#a78bfa' },
-    risk: { name: 'Risk', color: '#ff9f0a' },
-    executor: { name: 'Executor', color: '#00FF66' },
-    whale: { name: 'Whale', color: '#22d3ee' },
+    scanner: { name: 'Scanner', color: '#5b8cff', accent: '#9ec1ff' },
+    analyst: { name: 'Analyst', color: '#a78bfa', accent: '#ddd6fe' },
+    risk: { name: 'Risk', color: '#ff9f0a', accent: '#ffd28a' },
+    executor: { name: 'Executor', color: '#00FF66', accent: '#9affc0' },
+    whale: { name: 'Whale', color: '#22d3ee', accent: '#a5f3fc' },
   };
   const ORDER = ['scanner', 'analyst', 'risk', 'executor', 'whale'];
 
@@ -45,7 +45,10 @@
         speechT: 0,
         active: false,
         flash: 0,
-        action: 0, // 0..1 small action pose
+        action: 0,
+        fx: null, // { kind, t, life, side?, score? }
+        ping: 0,
+        radarOn: false,
       };
     });
 
@@ -56,15 +59,17 @@
     let last = 0;
     let running = false;
     let tSec = 0;
-    let coin = null;
+    let coin = null; // flip coin on buy path
     let lastSig = '';
-    let agentsSnap = {};
+    let lastScanSym = '';
+    let lastRiskFlash = '';
     let radarA = 0;
+    const fxPool = []; // lightweight world FX {x,y,kind,t,life,color}
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
       const cssW = Math.max(280, rect.width || canvas.parentElement?.clientWidth || 400);
-      const cssH = 105;
+      const cssH = 118;
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.round(cssW * dpr);
       canvas.height = Math.round(cssH * dpr);
@@ -82,17 +87,27 @@
       b.speechT = ms || 2400;
     }
 
+    function triggerFx(key, kind, extra) {
+      const b = bots[key];
+      if (!b) return;
+      b.fx = Object.assign({ kind, t: 0, life: 0.9 }, extra || {});
+      b.action = 1;
+      b.flash = 1;
+      b.active = true;
+    }
+
     function startCoinPass(symbol) {
-      coin = { prog: 0, symbol: symbol || '???' };
+      coin = { prog: 0, symbol: symbol || '???', spin: 0 };
       speak('scanner', `$${symbol || ''}`, 1600);
       bots.scanner.active = true;
       bots.scanner.action = 1;
+      bots.scanner.ping = 1;
+      triggerFx('scanner', 'ping');
     }
 
     function onState(state) {
       if (!state) return;
       const agents = state.agents || {};
-      agentsSnap = agents;
 
       const lines = {
         scanner: (() => {
@@ -109,7 +124,7 @@
         })(),
         risk: (() => {
           const a = agents.risk || {};
-          if (a.guarding) return 'guard';
+          if (a.flash === 'block' || a.guarding) return 'block';
           const la = a.lastAction;
           if (la && la.pnl != null) return la.pnl >= 0 ? `+${Math.abs(la.pnl).toFixed(1)}` : 'cut';
           return '';
@@ -132,28 +147,78 @@
       for (const k of ORDER) {
         if (lines[k]) speak(k, lines[k], 2200);
         bots[k].active = false;
+        bots[k].radarOn = false;
       }
 
       const sc = agents.scanner || {};
       const an = agents.analyst || {};
+      const rk = agents.risk || {};
+      const ex = agents.executor || {};
+      const wh = agents.whale || {};
+
       if (sc.status === 'scanning' || sc.status === 'streaming') {
         bots.scanner.active = true;
-        bots.scanner.action = Math.max(bots.scanner.action, 0.5);
+        bots.scanner.radarOn = true;
+        bots.scanner.action = Math.max(bots.scanner.action, 0.45);
       }
+      // ping when a new coin appears in recent
+      const newest = (sc.recent || []).find((x) => x && x.symbol) || null;
+      if (newest && newest.symbol && newest.symbol !== lastScanSym) {
+        lastScanSym = newest.symbol;
+        bots.scanner.ping = 1;
+        triggerFx('scanner', 'ping');
+        speak('scanner', `$${newest.symbol}`, 1800);
+      }
+
       if (an.status === 'scoring') {
         bots.analyst.active = true;
-        bots.analyst.action = Math.max(bots.analyst.action, 0.5);
+        bots.analyst.action = Math.max(bots.analyst.action, 0.55);
+        if (!bots.analyst.fx || bots.analyst.fx.kind !== 'glyphs') {
+          triggerFx('analyst', 'glyphs', { life: 1.1 });
+        }
       }
-      if ((agents.executor || {}).status === 'buying') {
+      if (an.status === 'passed' && an.symbol && an.score != null) {
+        const passSig = `pass:${an.symbol}:${an.score}`;
+        if (passSig !== bots._lastPass) {
+          bots._lastPass = passSig;
+          triggerFx('analyst', 'score', { score: an.score, life: 1.2 });
+          speak('analyst', String(an.score), 2400);
+          if (!coin) startCoinPass(an.symbol);
+        }
+      }
+
+      // Risk shield on block/veto flash from engine
+      if (rk.flash === 'block' || rk.flash === 'veto' || rk.guarding) {
+        const sig = `risk:${rk.flash}:${rk.lastRun || 0}:${rk.guarding || ''}`;
+        if (sig !== lastRiskFlash) {
+          lastRiskFlash = sig;
+          triggerFx('risk', 'shield', { life: 1.0 });
+          speak('risk', 'block', 2200);
+        }
+        bots.risk.active = true;
+      }
+      if (rk.status === 'cooldown') bots.risk.active = true;
+
+      if (ex.status === 'buying') {
         bots.executor.active = true;
         bots.executor.action = 1;
         bots.executor.flash = 1;
+        if (!bots.executor.fx || bots.executor.fx.kind !== 'zap') {
+          triggerFx('executor', 'zap', { side: 'buy', life: 0.85 });
+        }
       }
-      if ((agents.whale || {}).watching) bots.whale.active = true;
-      if ((agents.whale || {}).lastAlert) {
+
+      if (wh.watching) bots.whale.active = true;
+      if (wh.lastAlert || wh.flash === 'alert' || wh.flash === 'pulse') {
         bots.whale.active = true;
-        bots.whale.action = 1;
-        bots.whale.flash = 1;
+        if (wh.lastAlert) {
+          const wsig = `wh:${typeof wh.lastAlert === 'object' ? wh.lastAlert.ts || wh.lastAlert.symbol : wh.lastAlert}:${wh.lastRun || 0}`;
+          if (wsig !== bots._lastWhale) {
+            bots._lastWhale = wsig;
+            triggerFx('whale', 'ripple', { life: 1.15 });
+            speak('whale', 'sell', 3000);
+          }
+        }
       }
 
       const act = (state.activity && state.activity[0]) || null;
@@ -164,29 +229,27 @@
         if (t === 'buy') {
           startCoinPass(act.symbol);
           speak('executor', `$${act.symbol}`, 2800);
-          bots.executor.action = 1;
-          bots.executor.flash = 1;
-        } else if (act.pnl != null && (t === 'sell' || t === 'tp' || t === 'stopped')) {
-          if (act.pnl >= 0) {
+          triggerFx('executor', 'zap', { side: 'buy', life: 0.9 });
+        } else if (t === 'sell' || t === 'tp' || t === 'stopped' || t === 'dust' || t === 'time') {
+          const side = (act.pnl != null && act.pnl >= 0) ? 'buy' : 'sell';
+          // sell → red zap; winning sell still green-ish for executor
+          triggerFx('executor', 'zap', { side: act.pnl != null && act.pnl < 0 ? 'sell' : 'buy', life: 0.9 });
+          if (act.pnl != null && act.pnl >= 0) {
             speak('risk', `+${Math.abs(act.pnl).toFixed(1)}`, 2800);
             bots.risk.action = 1;
             bots.risk.flash = 1;
           } else {
             speak('risk', 'cut', 2400);
             bots.risk.action = 1;
+            triggerFx('risk', 'shield', { life: 0.7 });
           }
-        } else if (t === 'whale_exit' || (agents.whale && agents.whale.lastAlert)) {
+          speak('executor', act.pnl != null && act.pnl < 0 ? 'sell' : 'tp', 2000);
+        } else if (t === 'whale_exit' || t === 'whale') {
+          triggerFx('whale', 'ripple', { life: 1.2 });
           speak('whale', 'alert', 3000);
-          bots.whale.action = 1;
-          bots.whale.flash = 1;
-        }
-      }
-
-      if (an.status === 'passed' && an.symbol) {
-        const passSig = `pass:${an.symbol}:${an.score}`;
-        if (passSig !== bots._lastPass) {
-          bots._lastPass = passSig;
-          if (!coin) startCoinPass(an.symbol);
+        } else if (t === 'risk' && /block|veto|cooldown|loss/i.test(act.detail || '')) {
+          triggerFx('risk', 'shield', { life: 1.0 });
+          speak('risk', 'block', 2200);
         }
       }
     }
@@ -200,16 +263,6 @@
       ctx.arcTo(x, y + rh, x, y, rr);
       ctx.arcTo(x, y, x + rw, y, rr);
       ctx.closePath();
-    }
-
-    function px(x, y, rw, rh, fill, stroke) {
-      ctx.fillStyle = fill;
-      ctx.fillRect(x, y, rw, rh);
-      if (stroke) {
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 0.5, rw - 1, rh - 1);
-      }
     }
 
     function drawStage() {
@@ -228,85 +281,418 @@
       ctx.stroke();
     }
 
-    /**
-     * Tiny free-standing JEV agent (~48–52px). Crisp pixel-ish body + role prop.
-     * No badge, circle, ring, or card behind the figure.
-     */
-    function drawAgent(b) {
-      const meta = META[b.key];
-      const c = meta.color;
-      const scale = Math.min(1.65, w / 240); // ~52px tall on phone
-      const unit = 16 * scale; // body unit
-      const tall = unit * 3.2; // ~51px
-      const bob = reduced ? 0 : Math.sin(b.bob) * 1.8;
-      const x = b.x * w;
-      const groundY = h * 0.72;
-      const y = groundY + bob;
-      const blink = !reduced && Math.sin(b.bob * 0.55 + b.home * 9) > 0.92;
-      const act = b.action > 0 && !reduced ? Math.sin((1 - b.action) * Math.PI) : 0;
-
-      // soft glow under feet only
-      const gg = ctx.createRadialGradient(x, groundY + 2, 1, x, groundY + 2, unit * 1.1);
-      gg.addColorStop(0, hexAlpha(c, b.active || b.flash > 0 ? 0.35 : 0.16));
+    /** Soft body shadow under feet — not a ring/card */
+    function footGlow(x, groundY, c, intensity) {
+      const gg = ctx.createRadialGradient(x, groundY + 2, 1, x, groundY + 2, 18);
+      gg.addColorStop(0, hexAlpha(c, intensity));
       gg.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = gg;
       ctx.beginPath();
-      ctx.ellipse(x, groundY + 2, unit * 1.05, 4, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, groundY + 2, 16, 3.5, 0, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    function bodyBase(s, c, opts) {
+      const skin = opts.skin || '#1a1a24';
+      const suit = opts.suit || '#12121a';
+      const legSwing = opts.leg || 0;
+      // legs
+      ctx.strokeStyle = c;
+      ctx.lineWidth = Math.max(1.5, 2.2 * s);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-3.2 * s, -6 * s);
+      ctx.lineTo(-4.2 * s - legSwing, 1.5 * s);
+      ctx.moveTo(3.2 * s, -6 * s);
+      ctx.lineTo(4.2 * s + legSwing, 1.5 * s);
+      ctx.stroke();
+      // boots
+      ctx.fillStyle = c;
+      ctx.beginPath();
+      ctx.ellipse(-4.5 * s - legSwing, 2.2 * s, 3.2 * s, 1.4 * s, 0, 0, Math.PI * 2);
+      ctx.ellipse(4.5 * s + legSwing, 2.2 * s, 3.2 * s, 1.4 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // torso (rounded)
+      const tg = ctx.createLinearGradient(-8 * s, -22 * s, 8 * s, -4 * s);
+      tg.addColorStop(0, suit);
+      tg.addColorStop(1, '#0c0c12');
+      ctx.fillStyle = tg;
+      ctx.strokeStyle = c;
+      ctx.lineWidth = Math.max(1, 1.4 * s);
+      roundRect(-7.5 * s, -20 * s, 15 * s, 14 * s, 4 * s);
+      ctx.fill();
+      ctx.stroke();
+      // chest accent stripe
+      ctx.fillStyle = hexAlpha(c, 0.35);
+      roundRect(-5 * s, -17 * s, 10 * s, 2.2 * s, 1 * s);
+      ctx.fill();
+      // head
+      const hg = ctx.createLinearGradient(-7 * s, -32 * s, 7 * s, -18 * s);
+      hg.addColorStop(0, '#222230');
+      hg.addColorStop(1, skin);
+      ctx.fillStyle = hg;
+      ctx.strokeStyle = c;
+      roundRect(-7 * s, -31 * s, 14 * s, 12 * s, 5 * s);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function drawEyes(s, c, opts) {
+      const blink = opts.blink;
+      const glow = opts.glow || 0;
+      const open = !blink;
+      if (open) {
+        if (glow > 0) {
+          ctx.shadowColor = c;
+          ctx.shadowBlur = 6 * glow;
+        }
+        ctx.fillStyle = c;
+        ctx.beginPath();
+        ctx.arc(-2.8 * s, -25 * s, 1.7 * s, 0, Math.PI * 2);
+        ctx.arc(2.8 * s, -25 * s, 1.7 * s, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(-2.3 * s, -25.4 * s, 0.6 * s, 0, Math.PI * 2);
+        ctx.arc(3.3 * s, -25.4 * s, 0.6 * s, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      } else {
+        ctx.strokeStyle = c;
+        ctx.lineWidth = Math.max(1, 1.3 * s);
+        ctx.beginPath();
+        ctx.moveTo(-4.2 * s, -25 * s);
+        ctx.lineTo(-1.4 * s, -25 * s);
+        ctx.moveTo(1.4 * s, -25 * s);
+        ctx.lineTo(4.2 * s, -25 * s);
+        ctx.stroke();
+      }
+    }
+
+    function drawScanner(b, s, act) {
+      const c = META.scanner.color;
+      bodyBase(s, c, { suit: '#0d1528', leg: Math.sin(b.bob * 2) * 1.1 * s });
+      // visor band
+      ctx.fillStyle = hexAlpha(c, 0.55);
+      roundRect(-6.5 * s, -27.5 * s, 13 * s, 4 * s, 1.5 * s);
+      ctx.fill();
+      drawEyes(s, c, { blink: false, glow: b.radarOn ? 0.6 : 0.2 });
+      // dish antenna
+      ctx.save();
+      ctx.translate(0, -34 * s);
+      ctx.strokeStyle = c;
+      ctx.lineWidth = Math.max(1.2, 1.6 * s);
+      ctx.beginPath();
+      ctx.moveTo(0, 3 * s);
+      ctx.lineTo(0, 0);
+      ctx.stroke();
+      const spin = b.radarOn && !reduced ? radarA : 0.4;
+      ctx.rotate(spin);
+      // dish
+      ctx.fillStyle = hexAlpha(c, 0.25);
+      ctx.strokeStyle = c;
+      ctx.beginPath();
+      ctx.ellipse(0, -1 * s, 7 * s, 3.5 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      if (b.radarOn && !reduced) {
+        ctx.fillStyle = hexAlpha(c, 0.28);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, 11 * s, -0.35, 0.35);
+        ctx.closePath();
+        ctx.fill();
+        // sweep arcs
+        ctx.strokeStyle = hexAlpha(c, 0.45);
+        ctx.beginPath();
+        ctx.arc(0, 0, 9 * s, -0.9, 0.9);
+        ctx.stroke();
+      }
+      ctx.restore();
+      // ping rings
+      if (b.ping > 0 && !reduced) {
+        const p = 1 - b.ping;
+        ctx.strokeStyle = hexAlpha(c, b.ping * 0.7);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(0, -20 * s, 10 * s + p * 18, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, -20 * s, 6 * s + p * 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      // handheld scanner pad
+      ctx.fillStyle = '#0a1220';
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 1;
+      roundRect(8 * s, -16 * s - act * 2 * s, 7 * s, 9 * s, 1.5 * s);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = hexAlpha(c, 0.8);
+      ctx.fillRect(9.5 * s, -14 * s - act * 2 * s, 4 * s, 1.2 * s);
+      ctx.fillRect(9.5 * s, -11.5 * s - act * 2 * s, 3 * s, 1.2 * s);
+    }
+
+    function drawAnalyst(b, s, act) {
+      const c = META.analyst.color;
+      bodyBase(s, c, { suit: '#161022', leg: Math.sin(b.bob * 2) * 0.8 * s });
+      // hair / crown ridge
+      ctx.fillStyle = '#2a1f3d';
+      ctx.beginPath();
+      ctx.moveTo(-7 * s, -29 * s);
+      ctx.quadraticCurveTo(0, -36 * s - act * s, 7 * s, -29 * s);
+      ctx.lineTo(7 * s, -28 * s);
+      ctx.lineTo(-7 * s, -28 * s);
+      ctx.fill();
+      // glasses
+      ctx.strokeStyle = c;
+      ctx.lineWidth = Math.max(1.2, 1.5 * s);
+      ctx.strokeRect(-5.5 * s, -26.5 * s, 4.8 * s, 4 * s);
+      ctx.strokeRect(0.7 * s, -26.5 * s, 4.8 * s, 4 * s);
+      ctx.beginPath();
+      ctx.moveTo(-0.7 * s, -24.5 * s);
+      ctx.lineTo(0.7 * s, -24.5 * s);
+      ctx.stroke();
+      const eyeGlow = (b.fx && b.fx.kind === 'glyphs') || b.active ? 1 : 0.15;
+      drawEyes(s, c, { blink: Math.sin(b.bob * 0.55) > 0.94, glow: eyeGlow });
+      // floating data glyphs
+      if (((b.fx && b.fx.kind === 'glyphs') || b.active) && !reduced) {
+        const glyphs = ['∑', 'Δ', 'λ', '¥', '#', '∞'];
+        ctx.font = `700 ${Math.max(7, 8 * s)}px Inter, system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        for (let i = 0; i < 5; i++) {
+          const a = tSec * 2.2 + i * 1.1;
+          const gx = Math.cos(a) * (12 + i) * s;
+          const gy = -22 * s + Math.sin(a * 1.3) * 8 * s - act * 3 * s;
+          ctx.globalAlpha = 0.35 + 0.45 * Math.abs(Math.sin(a));
+          ctx.fillStyle = META.analyst.accent;
+          ctx.fillText(glyphs[i % glyphs.length], gx, gy);
+        }
+        ctx.globalAlpha = 1;
+      }
+      // tablet
+      ctx.fillStyle = '#120c1c';
+      ctx.strokeStyle = c;
+      roundRect(-12 * s - act * s, -15 * s, 8 * s, 10 * s, 1.5 * s);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = hexAlpha(c, 0.9);
+      ctx.beginPath();
+      ctx.moveTo(-10.5 * s - act * s, -8 * s);
+      ctx.lineTo(-9 * s - act * s, -12 * s);
+      ctx.lineTo(-7.5 * s - act * s, -9 * s);
+      ctx.lineTo(-5.5 * s - act * s, -13 * s);
+      ctx.stroke();
+      // score popup
+      if (b.fx && b.fx.kind === 'score' && b.fx.score != null) {
+        const u = clamp(b.fx.t / b.fx.life, 0, 1);
+        const rise = easeOut(u) * 14;
+        ctx.globalAlpha = 1 - u;
+        ctx.font = `800 ${Math.max(10, 12 * s)}px Inter, system-ui, sans-serif`;
+        ctx.fillStyle = META.analyst.accent;
+        ctx.textAlign = 'center';
+        ctx.fillText(String(b.fx.score), 0, -38 * s - rise);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function drawRisk(b, s, act) {
+      const c = META.risk.color;
+      bodyBase(s, c, { suit: '#1a1208', leg: Math.sin(b.bob * 2) * 0.7 * s });
+      // helm crest
+      ctx.fillStyle = c;
+      ctx.beginPath();
+      ctx.moveTo(-2 * s, -32 * s);
+      ctx.lineTo(0, -37 * s - act * s);
+      ctx.lineTo(2 * s, -32 * s);
+      ctx.closePath();
+      ctx.fill();
+      drawEyes(s, c, { blink: Math.sin(b.bob * 0.5 + 1) > 0.95, glow: b.fx && b.fx.kind === 'shield' ? 1 : 0.2 });
+      // kite shield
+      const ox = -11 * s - act * 1.5 * s;
+      const oy = -14 * s;
+      const flash = b.fx && b.fx.kind === 'shield' ? (1 - b.fx.t / b.fx.life) : 0;
+      ctx.save();
+      if (flash > 0) {
+        ctx.shadowColor = c;
+        ctx.shadowBlur = 14 * flash;
+      }
+      ctx.fillStyle = hexAlpha(c, 0.22 + flash * 0.45);
+      ctx.strokeStyle = flash > 0.2 ? META.risk.accent : c;
+      ctx.lineWidth = Math.max(1.4, 1.8 * s);
+      ctx.beginPath();
+      ctx.moveTo(ox, oy - 9 * s);
+      ctx.quadraticCurveTo(ox + 7 * s, oy - 7 * s, ox + 7 * s, oy);
+      ctx.quadraticCurveTo(ox + 7 * s, oy + 7 * s, ox, oy + 10 * s);
+      ctx.quadraticCurveTo(ox - 7 * s, oy + 7 * s, ox - 7 * s, oy);
+      ctx.quadraticCurveTo(ox - 7 * s, oy - 7 * s, ox, oy - 9 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // shield emblem
+      ctx.fillStyle = c;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy - 3 * s);
+      ctx.lineTo(ox + 2.5 * s, oy);
+      ctx.lineTo(ox, oy + 4 * s);
+      ctx.lineTo(ox - 2.5 * s, oy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      // expanding shield ring on flash (no permanent ring)
+      if (flash > 0 && !reduced) {
+        ctx.strokeStyle = hexAlpha(c, flash * 0.65);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, -14 * s, 14 * s + (1 - flash) * 16, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    function drawExecutor(b, s, act) {
+      const c = META.executor.color;
+      bodyBase(s, c, { suit: '#07140c', leg: Math.sin(b.bob * 2) * 1.3 * s });
+      // cap / visor peak
+      ctx.fillStyle = '#0c1f14';
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-8 * s, -29 * s);
+      ctx.lineTo(8 * s, -29 * s);
+      ctx.lineTo(6 * s, -33 * s);
+      ctx.lineTo(-6 * s, -33 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      drawEyes(s, c, { blink: Math.sin(b.bob * 0.6) > 0.93, glow: b.fx && b.fx.kind === 'zap' ? 1 : 0.25 });
+      // bolt gauntlet
+      const side = (b.fx && b.fx.side) || 'buy';
+      const zapC = side === 'sell' ? '#ff4d6d' : c;
+      ctx.save();
+      ctx.translate(10 * s, -18 * s - act * 4 * s);
+      if (b.fx && b.fx.kind === 'zap') {
+        ctx.shadowColor = zapC;
+        ctx.shadowBlur = 10;
+      }
+      ctx.fillStyle = zapC;
+      ctx.beginPath();
+      ctx.moveTo(2 * s, -7 * s);
+      ctx.lineTo(-3.5 * s, 0.5 * s);
+      ctx.lineTo(0.5 * s, 0.5 * s);
+      ctx.lineTo(-2 * s, 8 * s);
+      ctx.lineTo(4.5 * s, -1 * s);
+      ctx.lineTo(1 * s, -1 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      // zap streaks
+      if (b.fx && b.fx.kind === 'zap' && !reduced) {
+        const u = b.fx.t / b.fx.life;
+        ctx.strokeStyle = hexAlpha(zapC, 1 - u);
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 3; i++) {
+          const ang = -1.2 + i * 0.5 + u;
+          ctx.beginPath();
+          ctx.moveTo(8 * s, -22 * s);
+          ctx.lineTo(8 * s + Math.cos(ang) * 16 * s, -22 * s + Math.sin(ang) * 10 * s);
+          ctx.stroke();
+        }
+      }
+    }
+
+    function drawWhale(b, s, act) {
+      const c = META.whale.color;
+      bodyBase(s, c, { suit: '#06161a', leg: Math.sin(b.bob * 2) * 0.9 * s });
+      // hood / dorsal
+      ctx.fillStyle = '#0a2228';
+      ctx.strokeStyle = c;
+      ctx.beginPath();
+      ctx.moveTo(-7 * s, -28 * s);
+      ctx.quadraticCurveTo(0, -38 * s, 7 * s, -28 * s);
+      ctx.lineTo(5 * s, -28 * s);
+      ctx.quadraticCurveTo(0, -34 * s, -5 * s, -28 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // big single watching eye overlay (cyclops lens)
+      const pulse = b.fx && b.fx.kind === 'ripple' ? (1 - b.fx.t / b.fx.life) : (b.active ? 0.35 : 0);
+      ctx.save();
+      if (pulse > 0) {
+        ctx.shadowColor = c;
+        ctx.shadowBlur = 10 * pulse;
+      }
+      ctx.fillStyle = '#041014';
+      ctx.beginPath();
+      ctx.ellipse(0, -24.5 * s, 5.5 * s, 4 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = c;
+      ctx.beginPath();
+      ctx.arc(0, -24.5 * s, 2.4 * s + pulse * 0.6 * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#041014';
+      ctx.beginPath();
+      ctx.arc(0.5 * s, -24.5 * s, 1.1 * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(-0.6 * s, -25.2 * s, 0.55 * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      // companion mini-whale
+      const bx = 12 * s;
+      const by = -12 * s + Math.sin(tSec * 2.4 + 1) * (reduced ? 0 : 1.8 * s);
+      ctx.fillStyle = hexAlpha(c, 0.95);
+      ctx.beginPath();
+      ctx.ellipse(bx, by, 5 * s, 3 * s, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(bx + 4.5 * s, by);
+      ctx.lineTo(bx + 8 * s, by - 3.2 * s);
+      ctx.lineTo(bx + 7 * s, by + 3.2 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#041014';
+      ctx.beginPath();
+      ctx.arc(bx - 2 * s, by - 0.5 * s, 0.9 * s, 0, Math.PI * 2);
+      ctx.fill();
+      // ripple rings on whale sell
+      if (b.fx && b.fx.kind === 'ripple' && !reduced) {
+        const u = b.fx.t / b.fx.life;
+        for (let i = 0; i < 3; i++) {
+          const r = 8 * s + (u + i * 0.2) * 18;
+          ctx.strokeStyle = hexAlpha(c, (1 - u) * (0.55 - i * 0.12));
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.ellipse(0, -8 * s, r, r * 0.35, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+
+    function drawAgent(b) {
+      const meta = META[b.key];
+      const c = meta.color;
+      const scale = Math.min(1.75, w / 230); // ~56px body
+      const bob = reduced ? 0 : Math.sin(b.bob) * 2.1;
+      const x = b.x * w;
+      const groundY = h * 0.72;
+      const y = groundY + bob;
+      const act = b.action > 0 && !reduced ? Math.sin((1 - b.action) * Math.PI) : 0;
+
+      footGlow(x, groundY, c, b.active || b.flash > 0 ? 0.38 : 0.14);
 
       ctx.save();
       ctx.translate(x, y);
       if (b.flash > 0) {
         ctx.shadowColor = c;
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 7;
       }
 
-      const s = scale;
-      // legs (walk tip when active)
-      const leg = reduced ? 0 : Math.sin(b.bob * 2) * 1.2 * s;
-      const legLift = act * 2 * s;
-      px(-5 * s, -8 * s, 3.5 * s, 8 * s, c);
-      px(2 * s, -8 * s, 3.5 * s, 8 * s, c);
-      // foot shift
-      px(-6 * s - leg, 0, 4.5 * s, 2.2 * s, c);
-      px(1.5 * s + leg, 0 - legLift * 0.3, 4.5 * s, 2.2 * s, c);
-
-      // torso
-      px(-7 * s, -20 * s, 14 * s, 13 * s, '#12121a', c);
-
-      // arms
-      const armUp = b.key === 'executor' && b.active ? -4 * s * (0.4 + act) : 0;
-      const armOut = b.key === 'analyst' && b.active ? 2 * s : 0;
-      px(-10 * s, -18 * s, 3.2 * s, 2.4 * s, c);
-      px(7 * s + armOut, -18 * s + armUp, 3.2 * s, 2.4 * s, c);
-
-      // head
-      px(-6 * s, -29 * s, 12 * s, 10 * s, '#16161f', c);
-
-      // eyes / blink
-      if (!blink) {
-        px(-3.5 * s, -25 * s, 2.4 * s, 2.4 * s, c);
-        px(1.2 * s, -25 * s, 2.4 * s, 2.4 * s, c);
-        // eye shine
-        px(-3 * s, -25.3 * s, 1 * s, 1 * s, '#fff');
-        px(1.7 * s, -25.3 * s, 1 * s, 1 * s, '#fff');
-      } else {
-        ctx.strokeStyle = c;
-        ctx.lineWidth = Math.max(1, 1.2 * s);
-        ctx.beginPath();
-        ctx.moveTo(-3.5 * s, -24 * s);
-        ctx.lineTo(-1 * s, -24 * s);
-        ctx.moveTo(1.2 * s, -24 * s);
-        ctx.lineTo(3.6 * s, -24 * s);
-        ctx.stroke();
-      }
-
-      // role props — free-standing, no frames
-      if (b.key === 'scanner') drawScannerProp(c, s);
-      if (b.key === 'analyst') drawAnalystProp(c, s, act);
-      if (b.key === 'risk') drawRiskProp(c, s, act);
-      if (b.key === 'executor') drawExecutorProp(c, s, act);
-      if (b.key === 'whale') drawWhaleProp(c, s, act);
+      if (b.key === 'scanner') drawScanner(b, scale, act);
+      else if (b.key === 'analyst') drawAnalyst(b, scale, act);
+      else if (b.key === 'risk') drawRisk(b, scale, act);
+      else if (b.key === 'executor') drawExecutor(b, scale, act);
+      else if (b.key === 'whale') drawWhale(b, scale, act);
 
       ctx.restore();
 
@@ -316,15 +702,14 @@
       ctx.fillStyle = c;
       ctx.fillText(meta.name, x, groundY + 14);
 
-      // speech pill (only when speaking) — not a character frame
       if (b.speech && b.speechT > 0) {
         const alpha = clamp(b.speechT / 350, 0, 1);
         ctx.globalAlpha = alpha;
         ctx.font = '600 8px Inter, system-ui, sans-serif';
-        const tw = Math.min(ctx.measureText(b.speech).width, w * 0.15);
+        const tw = Math.min(ctx.measureText(b.speech).width, w * 0.16);
         const pw = tw + 8;
         const px0 = x - pw / 2;
-        const py = y - tall - 4;
+        const py = y - 56 * scale * 0.55;
         ctx.fillStyle = 'rgba(8,8,14,0.82)';
         roundRect(px0, py, pw, 13, 6);
         ctx.fill();
@@ -334,119 +719,7 @@
       }
     }
 
-    function drawScannerProp(c, s) {
-      // antenna + rotating radar dish
-      px(-1 * s, -34 * s, 2.2 * s, 5 * s, c);
-      ctx.save();
-      ctx.translate(0, -36 * s);
-      ctx.rotate(radarA);
-      ctx.strokeStyle = c;
-      ctx.lineWidth = Math.max(1, 1.3 * s);
-      ctx.beginPath();
-      ctx.arc(0, 0, 5 * s, -0.9, 0.9);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(0, 0, 8 * s, -0.7, 0.7);
-      ctx.stroke();
-      ctx.fillStyle = c;
-      ctx.beginPath();
-      ctx.arc(0, 0, 1.6 * s, 0, Math.PI * 2);
-      ctx.fill();
-      // beam wedge
-      if (!reduced) {
-        ctx.fillStyle = hexAlpha(c, 0.25);
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.arc(0, 0, 9 * s, -0.25, 0.25);
-        ctx.closePath();
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    function drawAnalystProp(c, s, act) {
-      // glasses
-      ctx.strokeStyle = c;
-      ctx.lineWidth = Math.max(1, 1.2 * s);
-      ctx.strokeRect(-5 * s, -26 * s, 4.5 * s, 3.5 * s);
-      ctx.strokeRect(0.5 * s, -26 * s, 4.5 * s, 3.5 * s);
-      ctx.beginPath();
-      ctx.moveTo(-0.5 * s, -24.2 * s);
-      ctx.lineTo(0.5 * s, -24.2 * s);
-      ctx.stroke();
-      // floating mini chart in hand
-      const ox = 11 * s + act * 2 * s;
-      const oy = -16 * s - act * 2 * s;
-      ctx.strokeStyle = c;
-      ctx.beginPath();
-      ctx.moveTo(ox - 3 * s, oy + 3 * s);
-      ctx.lineTo(ox - 1 * s, oy - 1 * s);
-      ctx.lineTo(ox + 1 * s, oy + 1 * s);
-      ctx.lineTo(ox + 3.5 * s, oy - 3 * s);
-      ctx.stroke();
-    }
-
-    function drawRiskProp(c, s, act) {
-      const ox = -12 * s - act * s;
-      const oy = -18 * s;
-      ctx.fillStyle = hexAlpha(c, 0.22);
-      ctx.strokeStyle = c;
-      ctx.lineWidth = Math.max(1, 1.2 * s);
-      ctx.beginPath();
-      ctx.moveTo(ox, oy - 6 * s);
-      ctx.lineTo(ox + 5 * s, oy - 4 * s);
-      ctx.lineTo(ox + 5 * s, oy + 2 * s);
-      ctx.lineTo(ox, oy + 6 * s);
-      ctx.lineTo(ox - 5 * s, oy + 2 * s);
-      ctx.lineTo(ox - 5 * s, oy - 4 * s);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    function drawExecutorProp(c, s, act) {
-      ctx.save();
-      ctx.translate(10 * s, -30 * s - act * 3 * s);
-      if (act > 0.2) {
-        ctx.shadowColor = c;
-        ctx.shadowBlur = 6;
-      }
-      ctx.fillStyle = c;
-      ctx.beginPath();
-      ctx.moveTo(2 * s, -6 * s);
-      ctx.lineTo(-3 * s, 1 * s);
-      ctx.lineTo(0.5 * s, 1 * s);
-      ctx.lineTo(-1.5 * s, 7 * s);
-      ctx.lineTo(4 * s, 0);
-      ctx.lineTo(0.5 * s, 0);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-
-    function drawWhaleProp(c, s, act) {
-      // periscope hat
-      px(-5 * s, -35 * s, 10 * s, 5 * s, '#0e1a1f', c);
-      px(4 * s, -34 * s, 2 * s, 7 * s + act * s, c);
-      px(3 * s, -28 * s + act * s, 4 * s, 2 * s, c);
-      // little whale buddy floating beside
-      const bx = 12 * s;
-      const by = -14 * s + Math.sin(tSec * 2.5 + 1) * (reduced ? 0 : 1.5 * s);
-      ctx.fillStyle = hexAlpha(c, 0.9);
-      ctx.beginPath();
-      ctx.ellipse(bx, by, 4.5 * s, 2.8 * s, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // tail
-      ctx.beginPath();
-      ctx.moveTo(bx + 4 * s, by);
-      ctx.lineTo(bx + 7 * s, by - 3 * s);
-      ctx.lineTo(bx + 7 * s, by + 3 * s);
-      ctx.closePath();
-      ctx.fill();
-      px(bx - 2 * s, by - 1 * s, 1.4 * s, 1.4 * s, '#050508');
-    }
-
-    function drawCoinDot() {
+    function drawCoinFlip() {
       if (!coin) return;
       const path = [
         { k: 'scanner', t: 0 },
@@ -461,15 +734,26 @@
       const span = b.t - a.t || 1;
       const u = easeOut(clamp((coin.prog - a.t) / span, 0, 1));
       const x = lerp(bots[a.k].x, bots[b.k].x, u) * w;
-      const y = h * 0.42 - Math.sin(u * Math.PI) * 8;
+      const y = h * 0.40 - Math.sin(u * Math.PI) * 10;
+      coin.spin += 0.35;
 
       ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(coin.spin);
+      const squash = Math.abs(Math.cos(coin.spin));
+      ctx.scale(1, 0.35 + 0.65 * squash);
       ctx.fillStyle = '#f5c542';
       ctx.shadowColor = '#f5c542';
-      ctx.shadowBlur = 6;
+      ctx.shadowBlur = 8;
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, 5, 5, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = '#8a6a12';
+      ctx.font = '700 7px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowBlur = 0;
+      ctx.fillText('$', 0, 0.5);
       ctx.restore();
 
       bots[a.k].active = true;
@@ -483,21 +767,25 @@
       tSec = ts / 1000;
 
       if (!reduced) {
-        radarA += dt * 2.5;
+        radarA += dt * 2.6;
         for (const k of ORDER) {
           const b = bots[k];
-          b.bob += dt * (2.2 + b.home);
+          b.bob += dt * (2.1 + b.home * 0.4);
           b.x = lerp(b.x, b.home, 0.12);
-          if (b.flash > 0) b.flash = Math.max(0, b.flash - dt * 1.1);
+          if (b.flash > 0) b.flash = Math.max(0, b.flash - dt * 1.15);
           if (b.action > 0) b.action = Math.max(0, b.action - dt * 0.7);
           if (b.speechT > 0) b.speechT -= dt * 1000;
+          if (b.ping > 0) b.ping = Math.max(0, b.ping - dt * 1.4);
+          if (b.fx) {
+            b.fx.t += dt;
+            if (b.fx.t >= b.fx.life) b.fx = null;
+          }
         }
         if (coin) {
-          coin.prog += dt * 0.7;
+          coin.prog += dt * 0.72;
           if (coin.prog >= 1) {
             speak('executor', `$${coin.symbol}`, 2000);
-            bots.executor.action = 1;
-            bots.executor.flash = 1;
+            triggerFx('executor', 'zap', { side: 'buy', life: 0.8 });
             coin = null;
           }
         }
@@ -508,7 +796,7 @@
       }
 
       drawStage();
-      drawCoinDot();
+      drawCoinFlip();
       for (const k of ORDER) drawAgent(bots[k]);
 
       if (reduced) {

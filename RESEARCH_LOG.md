@@ -492,3 +492,9 @@ Promote T* only if OOS expectancy &gt; Control and DD &lt; Control.
 5. X buzz: bearer-enabled, 1 cached counts query/tick for top candidates only.
 
 LIVE_ENABLED remains false.
+
+## 2026-11-02 — v19 desk agents (vector FX)
+
+- Replaced pixel-block floor agents with crisp ~56px canvas-vector characters (distinct silhouettes; no cards/rings).
+- State FX wired to engine: Scanner radar+ping, Analyst glyphs+score pop, Executor green/red zap + coin-flip, Risk shield flash on block, Whale eye ripple on sell.
+- Idle bob retained; prefers-reduced-motion still halves work. SW cache → v19.
