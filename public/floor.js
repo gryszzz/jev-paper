@@ -36,10 +36,12 @@
 
     const bots = {};
     ORDER.forEach((k, i) => {
+      // inset so edge FX (radar/ripple/companion) don't clip on ~390px
+      const home = 0.12 + (i * 0.76) / (ORDER.length - 1);
       bots[k] = {
         key: k,
-        home: (i + 0.5) / ORDER.length,
-        x: (i + 0.5) / ORDER.length,
+        home,
+        x: home,
         bob: Math.random() * Math.PI * 2,
         speech: '',
         speechT: 0,
@@ -638,22 +640,22 @@
       ctx.arc(-0.6 * s, -25.2 * s, 0.55 * s, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      // companion mini-whale
-      const bx = 12 * s;
+      // companion mini-whale (inward / left so right edge doesn't clip)
+      const bx = -11 * s;
       const by = -12 * s + Math.sin(tSec * 2.4 + 1) * (reduced ? 0 : 1.8 * s);
       ctx.fillStyle = hexAlpha(c, 0.95);
       ctx.beginPath();
       ctx.ellipse(bx, by, 5 * s, 3 * s, -0.15, 0, Math.PI * 2);
       ctx.fill();
       ctx.beginPath();
-      ctx.moveTo(bx + 4.5 * s, by);
-      ctx.lineTo(bx + 8 * s, by - 3.2 * s);
-      ctx.lineTo(bx + 7 * s, by + 3.2 * s);
+      ctx.moveTo(bx - 4.5 * s, by);
+      ctx.lineTo(bx - 8 * s, by - 3.2 * s);
+      ctx.lineTo(bx - 7 * s, by + 3.2 * s);
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = '#041014';
       ctx.beginPath();
-      ctx.arc(bx - 2 * s, by - 0.5 * s, 0.9 * s, 0, Math.PI * 2);
+      ctx.arc(bx + 2 * s, by - 0.5 * s, 0.9 * s, 0, Math.PI * 2);
       ctx.fill();
       // ripple rings on whale sell
       if (b.fx && b.fx.kind === 'ripple' && !reduced) {
@@ -672,7 +674,7 @@
     function drawAgent(b) {
       const meta = META[b.key];
       const c = meta.color;
-      const scale = Math.min(1.75, w / 230); // ~56px body
+      const scale = Math.min(1.55, w / 260); // ~50–56px body, fits 5-up on mobile
       const bob = reduced ? 0 : Math.sin(b.bob) * 2.1;
       const x = b.x * w;
       const groundY = h * 0.72;

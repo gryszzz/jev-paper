@@ -1,3 +1,5 @@
+
+- v19.1: pad agent homes 12–88% + inward whale companion so 5-up fits ~390px without clipping.
 # JEV Trencher Research Playbook
 
 **Status:** paper-only · LIVE stays OFF without Tony’s explicit go  
