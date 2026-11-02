@@ -186,11 +186,21 @@ async function scorePair(pair, settings, ctx = {}) {
   const seenLedger = tradedLedgerRef ? tradedLedgerRef.everTraded(pair.mint) : false;
   const seen = seenMem || seenLedger;
   const neverSeen = !seen;
-  // Novelty only for quality-passing never-seen coins (hard image/name filter upstream)
+  // Novelty only for quality-passing never-seen coins (hard image/name filter upstream).
+  // Scale novelty by real traction so empty curve dust doesn't auto-fill FRESH slots.
   const qualityOk = pair.freshQualityOk !== false && !pair._freshReject && !pair.imageReuse && !pair.nameDup;
+  const tr0 = Number(pair.freshTraction) || 0;
+  const buysM5n = Number(pair.buysM5) || 0;
+  const volM5n = Number(pair.volumeM5) || 0;
+  const bpmN = Number(pair.buyersPerMin) || 0;
+  const hasAnyTraction = tr0 >= 2 || buysM5n >= 2 || volM5n >= 200 || bpmN >= 0.4 ||
+    Number(pair.whaleCluster || 0) >= 1 || Number(pair.bondingProgress || 0) >= 0.02;
   if (neverSeen && qualityOk && (lane === LANE.FRESH || pair.source === 'pumpportal' || pair.fromPump)) {
-    score += 22;
-    breakdown.push({ k: 'novelty', v: 22, note: 'brand-new FRESH launch' });
+    let nov = hasAnyTraction ? 22 : 8; // bare novelty without buyers is weak
+    if (tr0 >= 8) nov = 26;
+    else if (tr0 >= 4) nov = 24;
+    score += nov;
+    breakdown.push({ k: 'novelty', v: nov, note: hasAnyTraction ? 'brand-new FRESH + traction' : 'new but thin traction' });
   } else if (neverSeen && qualityOk && lane === LANE.GRAD) {
     score += 14;
     breakdown.push({ k: 'novelty', v: 14, note: 'never-traded grad' });
@@ -219,15 +229,21 @@ async function scorePair(pair, settings, ctx = {}) {
       }
     }
   }
-  // Traction priority for FRESH
+  // Traction priority for FRESH (buyers / vol / smart wallets)
   if (lane === LANE.FRESH) {
-    const tr = Number(pair.freshTraction) || 0;
+    const tr = tr0;
     if (tr >= 8) {
-      score += 8;
-      breakdown.push({ k: 'traction', v: 8, note: 'unique buyers/vol/smart' });
+      score += 10;
+      breakdown.push({ k: 'traction', v: 10, note: 'unique buyers/vol/smart' });
     } else if (tr >= 4) {
-      score += 4;
-      breakdown.push({ k: 'traction', v: 4, note: 'early buyers' });
+      score += 6;
+      breakdown.push({ k: 'traction', v: 6, note: 'early buyers' });
+    } else if (tr >= 2) {
+      score += 3;
+      breakdown.push({ k: 'traction', v: 3, note: 'hints of flow' });
+    } else if (!hasAnyTraction) {
+      score -= 6;
+      breakdown.push({ k: 'traction', v: -6, note: 'zero buyers/vol (soft)' });
     }
   }
   if (tradedLedgerRef && tradedLedgerRef.isStaleOnBoard(pair.mint)) {

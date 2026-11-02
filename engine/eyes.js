@@ -171,8 +171,8 @@ function freshQuality(pair = {}, { history = [] } = {}) {
     (pair.socials && (pair.socials.twitter || pair.socials.telegram || pair.socials.website ||
       (Array.isArray(pair.socials) && pair.socials.length)))
   );
-  if (hasSocial) softBonus += 4;
-  else softPenalty += 3;
+  if (hasSocial) softBonus += 3;
+  else softPenalty += 2;
 
   // Soft: description
   const desc = String(pair.description || pair.desc || '').trim();

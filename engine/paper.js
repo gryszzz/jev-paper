@@ -1806,6 +1806,10 @@ class PaperEngine {
         const staleA = a.staleOnBoard ? 1 : 0;
         const staleB = b.staleOnBoard ? 1 : 0;
         if (staleA !== staleB) return staleA - staleB;
+        // Prefer real traction (buyers/vol/smart) over empty curve dust
+        const trA = Number(a.freshTraction) || 0;
+        const trB = Number(b.freshTraction) || 0;
+        if (trA !== trB) return trB - trA;
         return (b.score || 0) - (a.score || 0);
       });
       // Hard reserve: if any FRESH/new-pool candidate passes, pick it before GRAD/MOVER
