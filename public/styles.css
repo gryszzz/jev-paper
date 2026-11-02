@@ -75,6 +75,12 @@ body { min-height: 100dvh; }
 .pill-paper {
   background: rgba(0,255,102,0.1); color: var(--green); border-color: rgba(0,255,102,0.45) !important;
 }
+.pill-learn {
+  background: rgba(120,160,255,0.12); color: #9db4ff; border-color: rgba(120,160,255,0.4) !important;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pill-learn.promoted { color: var(--green); border-color: rgba(0,255,102,0.45) !important; background: rgba(0,255,102,0.1); }
+.pill-learn.rejected { color: #ffb347; border-color: rgba(255,179,71,0.45) !important; }
 
 /* —— Equity hero (trencher-style) —— */
 .equity-hero {

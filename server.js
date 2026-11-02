@@ -162,6 +162,20 @@ app.post('/api/reset', (req, res) => {
   res.json(engine.reset(bal));
 });
 
+app.get('/api/learning', (_req, res) => {
+  res.json(engine.learningReport());
+});
+
+app.post('/api/learning/refit', async (req, res) => {
+  try {
+    const force = !(req.body && req.body.force === false);
+    const report = await engine.forceRefit({ force });
+    res.json(report);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('*', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

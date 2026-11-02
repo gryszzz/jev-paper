@@ -6,3 +6,5 @@ refs/
 .env
 shots/
 data/learn/*.json
+data/learn/*.jsonl
+data/learn/weights-v*.json

@@ -1,5 +1,5 @@
 /* JEV Paper SW — network-first shell, cache fallback offline */
-const CACHE = 'jev-paper-v20-20261102';
+const CACHE = 'jev-paper-v21-20261102';
 const ASSETS = [
   '/',
   '/index.html',

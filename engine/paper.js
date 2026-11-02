@@ -851,17 +851,84 @@ class PaperEngine {
     }
   }
 
+  learningReport() {
+    return learn.learningReport(this.state);
+  }
+
+  async forceRefit(opts = {}) {
+    await this._ready;
+    const state = this.state;
+    // Refresh prices for open learn candidates before labeling
+    await this._refreshLearnPrices();
+    learn.tickOutcomes(state, this._learnPriceMap());
+    const r = learn.nightlyRetrain(state, { force: opts.force !== false, minN: opts.minN });
+    if (r && r.promoted) {
+      addActivity(state, { type: 'learn', symbol: '—', agent: 'Analyst', detail: `Promoted weights v${r.version} · beat CONTROL` });
+    } else if (r && r.ok) {
+      addActivity(state, { type: 'learn', symbol: '—', agent: 'Analyst', detail: `Refit v${r.version} rejected (CONTROL stronger)` });
+    } else if (r && r.reason) {
+      addActivity(state, { type: 'learn', symbol: '—', agent: 'Analyst', detail: `Refit blocked: ${r.reason}` });
+    }
+    try {
+      learn.growSmartWalletsFromWinners(state, {
+        promoteFn: (_reg, addr, meta) => {
+          try {
+            const reg = ensureRegistry(state);
+            recordWalletEvent(reg, addr, { side: 'buy', note: meta && meta.note });
+          } catch (_) {}
+        },
+      });
+    } catch (_) {}
+    this.persist();
+    this.emit();
+    return { ...r, learn: learn.stats(state) };
+  }
+
+  _learnPriceMap() {
+    const state = this.state;
+    const priceByMint = {};
+    for (const p of state.positions || []) {
+      if (p.mint && (p.markPrice || p.lastPrice)) priceByMint[p.mint] = p.markPrice || p.lastPrice;
+    }
+    for (const p of state.scanned || []) {
+      if (p.mint && p.priceUsd) priceByMint[p.mint] = p.priceUsd;
+    }
+    for (const p of state.scored || []) {
+      if (p.mint && p.priceUsd) priceByMint[p.mint] = p.priceUsd;
+    }
+    return priceByMint;
+  }
+
+  async _refreshLearnPrices() {
+    const state = this.state;
+    const L = learn.ensureLearn(state);
+    const mints = [...new Set((L.candidates || []).slice(0, 40).map((c) => c.mint).filter(Boolean))];
+    if (!mints.length) return;
+    try {
+      const jp = await jupiterPrice(mints);
+      for (const m of mints) {
+        const row = jp && jp[m];
+        const px = row && Number(row.usdPrice || row.price || row.usd);
+        if (px > 0) {
+          const c = (L.candidates || []).find((x) => x.mint === m);
+          if (c) {
+            if (!c.entryPrice) c.entryPrice = px;
+            c.lastPrice = px;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   async tickLearn() {
     const state = this.state;
     if (!state) return;
     try {
-      // Outcome stamps from latest prices
-      const priceByMint = {};
-      for (const p of state.positions || []) {
-        if (p.mint && p.lastPrice) priceByMint[p.mint] = p.lastPrice;
-      }
-      for (const p of state.scanned || []) {
-        if (p.mint && p.priceUsd) priceByMint[p.mint] = p.priceUsd;
+      await this._refreshLearnPrices();
+      const priceByMint = this._learnPriceMap();
+      // also fold candidate lastPrice
+      for (const c of (learn.ensureLearn(state).candidates || [])) {
+        if (c.mint && c.lastPrice) priceByMint[c.mint] = c.lastPrice;
       }
       learn.tickOutcomes(state, priceByMint);
       // Nightly retrain window: 04:00–05:00 America/New_York-ish (box is ET)
@@ -877,7 +944,7 @@ class PaperEngine {
             addActivity(state, { type: 'learn', symbol: '—', agent: 'Analyst', detail: `Retrain v${r.version} held (no promote)` });
           }
           learn.growSmartWalletsFromWinners(state, {
-            promoteFn: (addr, meta) => {
+            promoteFn: (_reg, addr, meta) => {
               try {
                 const reg = ensureRegistry(state);
                 recordWalletEvent(reg, addr, { side: 'buy', note: meta && meta.note });

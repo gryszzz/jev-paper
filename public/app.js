@@ -746,6 +746,48 @@
       : '<div class="whale-row"><span>No open positions watched</span></div>';
   }
 
+
+  function fmtAgo(ts) {
+    if (!ts) return 'never';
+    const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+    return Math.floor(sec / 86400) + 'd ago';
+  }
+
+  function renderLearn() {
+    if (!state) return;
+    const L = state.learn || {};
+    const chip = $('learnChip');
+    const status = L.status || (L.lastPromoteAt && (!L.lastRejectAt || L.lastPromoteAt >= L.lastRejectAt) ? 'promoted' : (L.lastRejectAt ? 'rejected' : 'idle'));
+    const ver = L.promotedVersion || L.weightsVersion || 0;
+    const n = L.labeled || 0;
+    if (chip) {
+      chip.textContent = `LEARN · v${ver} · n=${n} · ${status}`;
+      chip.classList.toggle('promoted', status === 'promoted');
+      chip.classList.toggle('rejected', status === 'rejected');
+      chip.title = `refit ${fmtAgo(L.lastTrainAt)} · logged ${L.logged || 0} · trains ${L.trains || 0} · promotes ${L.promotes || 0} · rejects ${L.rejects || 0}`;
+    }
+    if ($('acctLearn')) $('acctLearn').textContent = `${status} · logged ${L.logged || 0}`;
+    if ($('acctRefit')) $('acctRefit').textContent = fmtAgo(L.lastTrainAt);
+    if ($('acctWeights')) $('acctWeights').textContent = `v${ver}` + (ver && status === 'promoted' ? ' · live' : ' · CONTROL');
+    const box = $('learnStats');
+    if (box) {
+      const lr = L.lastRefit || {};
+      const ctrl = lr.controlExpectancy != null ? Number(lr.controlExpectancy).toFixed(3) : (L.controlExpectancy != null ? Number(L.controlExpectancy).toFixed(3) : '—');
+      const learned = lr.learnedExpectancy != null ? Number(lr.learnedExpectancy).toFixed(3) : (L.learnedExpectancy != null ? Number(L.learnedExpectancy).toFixed(3) : '—');
+      box.innerHTML = `<div class="strat-card"><div class="strat-title">Learning loop</div>
+        <div class="strat-row"><span>Weight version</span><strong>v${ver}</strong></div>
+        <div class="strat-row"><span>Status</span><strong>${status}</strong></div>
+        <div class="strat-row"><span>Samples labeled</span><strong>${n}</strong></div>
+        <div class="strat-row"><span>Candidates logged</span><strong>${L.logged || 0}</strong></div>
+        <div class="strat-row"><span>Last refit</span><strong>${fmtAgo(L.lastTrainAt)}</strong></div>
+        <div class="strat-row"><span>CONTROL vs learned</span><strong>${ctrl} / ${learned}</strong></div>
+      </div>`;
+    }
+  }
+
   function renderAccount() {
     if (!state) return;
     $('acctMode').textContent = state.mode || 'PAPER';
@@ -808,6 +850,7 @@
     renderActivity('activityFull', 80);
     renderStats();
     renderAccount();
+    renderLearn();
     if (state.newPeak && state.equity > peakCelebrated) {
       peakCelebrated = state.equity;
       burstConfetti();
