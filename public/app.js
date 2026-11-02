@@ -147,7 +147,7 @@
       else ctx.lineTo(x, y);
     });
     ctx.strokeStyle = '#00FF66';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.4;
     ctx.stroke();
     const last = pts[pts.length - 1];
     ctx.lineTo(X(last.t), h - pad);
@@ -368,40 +368,43 @@
       </div>`;
     }).join('');
 
-    const trades = (state.activity || []).filter((it) => it.type === 'buy' || it.type === 'sell' || it.pnl != null).slice(0, 3);
+    const trades = (state.activity || []).filter((it) => {
+      const t = (it.type || '').toLowerCase();
+      return t === 'buy' || t === 'sell' || t === 'tp' || t === 'stopped' || t === 'stop' || it.pnl != null || it.amountUsd != null;
+    }).slice(0, 40);
     const stack = $('tradeStack');
+    const countEl = $('tradesCount');
+    if (countEl) countEl.textContent = String(trades.length);
     if (!trades.length) {
       stack.innerHTML = '<div class="trade-empty">No paper trades yet — desk is scanning</div>';
     } else {
       stack.innerHTML = trades.map((it) => {
-        const win = it.pnl != null ? it.pnl >= 0 : it.type === 'buy';
-        const loss = it.pnl != null && it.pnl < 0;
+        const t = (it.type || '').toLowerCase();
+        let side = 'other';
+        let sideLabel = (it.type || 'TRADE').toUpperCase();
+        if (t === 'buy') { side = 'buy'; sideLabel = 'BUY'; }
+        else if (t === 'sell' || t === 'tp') { side = 'sell'; sideLabel = t === 'tp' ? 'TP' : 'SELL'; }
+        else if (t === 'stopped' || t === 'stop') { side = 'sell'; sideLabel = 'STOP'; }
         const right = it.pnl != null
-          ? `<div class="tc-right ${it.pnl >= 0 ? 'pos' : 'neg'}">${money(it.pnl)}<span class="sub">${pct(it.pnlPct)}</span></div>`
-          : `<div class="tc-right">${money(it.amountUsd)}</div>`;
+          ? `<div class="tr-right ${it.pnl >= 0 ? 'pos' : 'neg'}">${money(it.pnl)}<span class="sub">${pct(it.pnlPct)}</span></div>`
+          : `<div class="tr-right">${money(it.amountUsd)}<span class="sub">${ago(it.ts)}</span></div>`;
         const img = it.icon || iconFallback(it.symbol);
-        const title = it.type === 'buy' ? `BUY $${it.symbol}` : it.type === 'sell' ? `SELL $${it.symbol}` : `$${it.symbol}`;
-        return `<div class="trade-card ${loss ? 'loss' : win ? 'win' : ''}" data-mint="${it.mint || ''}">
-          <span class="tc-agent">${(it.agent || 'EXEC').toUpperCase().slice(0, 8)}</span>
+        const agent = (it.agent || 'EXEC').replace(/^Risk.*/, 'Risk').replace(/^Whale.*/, 'Whale');
+        const size = it.amountUsd != null ? money(it.amountUsd, 0) : '';
+        const subBits = [agent, size, ago(it.ts)].filter(Boolean).join(' · ');
+        return `<div class="trade-row" data-mint="${it.mint || ''}">
           <img src="${img}" alt="" onerror="this.src='${iconFallback(it.symbol)}'"/>
-          <div class="tc-mid"><div class="tc-title">${title}</div><div class="tc-sub">${it.detail || ago(it.ts)}</div></div>
+          <div class="tr-mid">
+            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'}</div>
+            <div class="tr-sub"><span class="tr-agent">${agent}</span><span>${subBits.replace(agent + ' · ', '')}</span></div>
+          </div>
           ${right}
         </div>`;
       }).join('');
-      stack.querySelectorAll('.trade-card').forEach((el) => {
+      stack.querySelectorAll('.trade-row').forEach((el) => {
         el.onclick = () => openCoin(el.dataset.mint);
       });
     }
-
-    $('agentBlurbs').innerHTML = AGENT_ORDER.map((key) => {
-      const a = agents[key] || {};
-      const meta = AGENT_META[key];
-      const speech = agentSpeech(key, a) || agentLivePlain(key, a);
-      return `<div class="blurb">
-        <div class="bn" style="color:${meta.color}">${meta.name}</div>
-        <div class="bd">${meta.role} <span class="last">Last: <strong>${speech || '—'}</strong></span></div>
-      </div>`;
-    }).join('');
   }
 
   function agentLiveLine(key, a, s) {
@@ -551,17 +554,21 @@
     const gp = state.gainPct || 0;
     const gainEl = $('gainLine');
     if (gainEl) {
-      gainEl.textContent = `${g >= 0 ? '+' : ''}${money(g)} (${pct(gp)})`;
+      gainEl.textContent = `${g >= 0 ? '+' : ''}${money(g)}`;
       gainEl.classList.toggle('neg', g < 0);
+      gainEl.classList.toggle('pos', g >= 0);
+    }
+    const pill = $('gainPill');
+    if (pill) {
+      pill.textContent = pct(gp);
+      pill.classList.toggle('neg', gp < 0);
     }
     const cashPos = $('cashPos');
-    if (cashPos) cashPos.textContent = `${money(state.cash, 0)} · ${(state.positions || []).length}`;
+    if (cashPos) cashPos.textContent = `${money(state.cash, 0)} · ${(state.positions || []).length} pos`;
     const mult = $('multPill');
-    if (mult) mult.textContent = `${(state.multiplier || 1).toFixed(2)}x · peak ${money(state.peakBalance, 0)}`;
+    if (mult) mult.textContent = `${(state.multiplier || 1).toFixed(2)}x`;
     $('bannerText').textContent = (state.banner && state.banner.text) || 'Paper desk · memecoins';
     $('modeBadge').textContent = 'PAPER';
-    const disc = $('disclaimer');
-    if (disc) disc.textContent = state.disclaimer || 'PAPER only · no real money · LIVE disabled';
     const running = state.settings && state.settings.running && !state.killSwitch;
     const rt = $('runToggle');
     if (rt) {
@@ -571,8 +578,8 @@
     }
     const pk = $('pillKill');
     if (pk) pk.classList.toggle('on', !!state.killSwitch);
-    sparkPath(state.equityHistory || [], '#00FF66', 'sparkPaper');
-    sparkPath(state.equityHistory || [], '#a78bfa', 'sparkCash');
+    const chart = $('equityChart');
+    if (chart) drawEquity(chart, state.equityHistory || []);
     renderDesk();
     renderCoins();
     renderActivity('activityFull', 80);
@@ -685,8 +692,8 @@
       tf = b.dataset.tf;
       document.querySelectorAll('.tf').forEach((x) => x.classList.toggle('active', x === b));
       if (state) {
-        sparkPath(state.equityHistory || [], '#00FF66', 'sparkPaper');
-        sparkPath(state.equityHistory || [], '#a78bfa', 'sparkCash');
+        const chart = $('equityChart');
+        if (chart) drawEquity(chart, state.equityHistory || []);
       }
     });
     const pillKill = $('pillKill');

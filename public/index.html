@@ -7,19 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="JEV — Solana memecoin paper-trading agents. Mode: PAPER. No real money." />
-  <link rel="manifest" href="/manifest.json?v=7" />
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=7" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=7" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=7" />
+  <link rel="manifest" href="/manifest.json?v=8" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=8" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=8" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=8" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <title>JEV Paper</title>
-  <link rel="stylesheet" href="/styles.css?v=7" />
+  <link rel="stylesheet" href="/styles.css?v=8" />
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hide">
-    <img src="/img/j-logo.svg?v=7" alt="JEV" class="lock-logo" />
+    <img src="/img/j-logo.svg?v=8" alt="JEV" class="lock-logo" />
     <h1>JEV</h1>
     <p>Enter passcode to control agents</p>
     <input id="passInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Passcode" />
@@ -30,7 +30,7 @@
   <div id="app">
     <header class="desk-header">
       <div class="desk-brand">
-        <img src="/img/j-mark.svg?v=7" class="desk-logo" alt="J." />
+        <img src="/img/j-mark.svg?v=8" class="desk-logo" alt="J." />
         <div>
           <div class="desk-title">JEV</div>
           <div class="desk-sub" id="bannerText">Paper desk · memecoins</div>
@@ -44,26 +44,30 @@
     </header>
 
     <main id="view-home" class="view active">
-      <div class="tf-seg" id="tfRow">
-        <button class="tf" data-tf="1H">1H</button>
-        <button class="tf active" data-tf="1D">1D</button>
-        <button class="tf" data-tf="ALL">ALL</button>
-      </div>
-
-      <div class="bal-cards">
-        <div class="bal-card">
-          <div class="bal-label">PAPER</div>
-          <div class="bal-val" id="balance">$0.00</div>
-          <svg class="bal-spark" id="sparkPaper" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg>
-          <div class="bal-sub" id="gainLine">+$0.00</div>
+      <section class="equity-hero">
+        <div class="eq-top">
+          <div>
+            <div class="eq-label">PAPER BALANCE</div>
+            <div id="balance" class="odometer">$0.00</div>
+          </div>
+          <div class="eq-right">
+            <span id="gainPill" class="gain-pill">+0.00%</span>
+            <div class="tf-seg" id="tfRow">
+              <button class="tf" data-tf="1H">1H</button>
+              <button class="tf active" data-tf="1D">1D</button>
+              <button class="tf" data-tf="ALL">ALL</button>
+            </div>
+          </div>
         </div>
-        <div class="bal-card bal-card-alt">
-          <div class="bal-label">CASH · POS</div>
-          <div class="bal-val sm" id="cashPos">$0 · 0</div>
-          <svg class="bal-spark" id="sparkCash" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"></svg>
-          <div class="bal-sub" id="multPill">1.00x · peak $0</div>
+        <div class="eq-meta">
+          <span id="gainLine">+$0.00</span>
+          <span class="dot-sep">·</span>
+          <span id="multPill">1.00x</span>
+          <span class="dot-sep">·</span>
+          <span id="cashPos">$0 · 0 pos</span>
         </div>
-      </div>
+        <canvas id="equityChart" width="720" height="220"></canvas>
+      </section>
 
       <section class="desk-panel" id="deskPanel">
         <div class="desk-orbs" aria-hidden="true">
@@ -74,9 +78,11 @@
         <div class="desk-status" id="deskStatus"></div>
       </section>
 
-      <div class="trade-stack" id="tradeStack"></div>
-      <div class="agent-blurbs" id="agentBlurbs"></div>
-      <p class="disclaimer" id="disclaimer"></p>
+      <div class="trades-head">
+        <h2>Trades</h2>
+        <span id="tradesCount" class="muted-count">0</span>
+      </div>
+      <div class="trade-feed" id="tradeStack"></div>
     </main>
 
     <main id="view-coins" class="view">
@@ -172,6 +178,6 @@
       </button>
     </nav>
   </div>
-  <script src="/app.js?v=7"></script>
+  <script src="/app.js?v=8"></script>
 </body>
 </html>
