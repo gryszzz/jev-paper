@@ -515,12 +515,10 @@
           : '';
         const arm = it.abArm ? `<span class="tr-arm">${it.abArm}</span>` : '';
         const rScore = it.runnerScore != null ? `<span class="tr-runner">R${it.runnerScore}</span>` : '';
-        const subBits = [agent, size, ago(it.ts)].filter(Boolean).join(' · ');
         return `<div class="trade-row" data-mint="${it.mint || ''}">
           <img src="${img}" alt="" onerror="this.src='${iconFallback(it.symbol)}'"/>
           <div class="tr-mid">
-            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'} ${laneBadge}${modeBadge}${arm}${rScore}</div>
-            <div class="tr-sub"><span class="tr-agent">${agent}</span><span>${subBits.replace(agent + ' · ', '')}</span></div>
+            <div class="tr-title"><span class="tr-side ${side}">${sideLabel}</span> $${it.symbol || '—'} ${laneBadge}${modeBadge}${arm}${rScore}<span class="tr-meta-inline">${[ago(it.ts), size].filter(Boolean).join(' · ')}</span></div>
           </div>
           ${right}
         </div>`;
@@ -782,7 +780,7 @@
     if (cashPos) cashPos.textContent = `${money(state.cash, 0)} · ${(state.positions || []).length} pos`;
     const mult = $('multPill');
     if (mult) mult.textContent = `${(state.multiplier || 1).toFixed(2)}x`;
-    $('bannerText').textContent = (state.banner && state.banner.text) || 'Paper desk · memecoins';
+    const bt = $('bannerText'); if (bt) bt.textContent = (state.banner && state.banner.text) || 'Paper desk · memecoins';
     $('modeBadge').textContent = 'PAPER';
     const running = state.settings && state.settings.running && !state.killSwitch;
     const rt = $('runToggle');
@@ -1022,7 +1020,7 @@
         location.reload();
       });
       navigator.serviceWorker
-        .register('/sw.js?v=6')
+        .register('/sw.js?v=18')
         .then((reg) => {
           const ping = () => reg.update().catch(() => {});
           ping();

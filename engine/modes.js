@@ -42,7 +42,7 @@ const AB_ARMS = {
   T1: {
     id: 'T1',
     label: 'T1 A+C hybrid',
-    minRunner: 55,
+    minRunner: 38,
     useRunnerGate: true,
     forcedMode: 'A', // spike + initials hybrid → tag RIDE, moonish ladder
     sizeMult: 0.7,
@@ -66,7 +66,7 @@ const AB_ARMS = {
   T2: {
     id: 'T2',
     label: 'T2 scalp B',
-    minRunner: 40,
+    minRunner: 30,
     useRunnerGate: true,
     forcedMode: 'B',
     sizeMult: 0.55,
@@ -93,7 +93,7 @@ const AB_ARMS = {
   T3: {
     id: 'T3',
     label: 'T3 moon C',
-    minRunner: 70,
+    minRunner: 48,
     useRunnerGate: true,
     forcedMode: 'C',
     sizeMult: 0.85,
@@ -158,8 +158,8 @@ function modeDecision(runner, pair = {}, ctx = {}) {
   const score = Number(runner && runner.score) || 0;
   let sum = 0;
   // Runner band
-  if (score >= 70) sum += 2;
-  else if (score >= 40) sum += 1;
+  if (score >= 52) sum += 2;
+  else if (score >= 32) sum += 1;
   // Holder quality
   const top10 = Number(ctx.top10) || Number(pair.top10Pct) || 0;
   if (top10 > 0 && top10 < 30) sum += 2;
@@ -169,7 +169,7 @@ function modeDecision(runner, pair = {}, ctx = {}) {
   if (hits >= 2) sum += 2;
   else if (hits >= 1) sum += 1;
   // Narrative
-  if ((pair.narratives || []).length && score >= 55) sum += 2;
+  if ((pair.narratives || []).length && score >= 42) sum += 2;
   else if ((pair.narratives || []).length) sum += 1;
   // Liquidity
   const liq = Number(pair.liquidity) || 0;
@@ -188,23 +188,33 @@ function modeDecision(runner, pair = {}, ctx = {}) {
   if (sum <= 4) mode = 'A';
   else if (sum <= 7) mode = 'B';
   else mode = 'C';
-  if (score >= 80 && sum >= 10) mode = 'C';
-  if (score < 40) mode = null;
-  else if (score < 55) mode = 'B';
-  else if (score >= 70 && mode === 'A') mode = 'C';
+  if (score >= 65 && sum >= 9) mode = 'C';
+  if (score < 30) mode = null;
+  else if (score < 42) mode = 'B';
+  else if (score >= 52 && mode === 'A') mode = 'C';
 
   return { mode, sum, tag: mode ? MODE_TAG[mode] : null };
 }
 
-function pickArm(state) {
+function pickArm(state, runnerScoreVal) {
   const settings = state.settings || {};
   if (settings.abHarness === false) {
     return AB_ARMS.CONTROL;
   }
-  state._abCursor = (state._abCursor || 0) % ARM_ORDER.length;
-  const id = ARM_ORDER[state._abCursor];
-  state._abCursor = (state._abCursor + 1) % ARM_ORDER.length;
-  return AB_ARMS[id];
+  const score = Number(runnerScoreVal) || 0;
+  // Rotate, but skip arms whose free-data runner gate fails — fall through so T arms get fills.
+  const start = (state._abCursor || 0) % ARM_ORDER.length;
+  for (let i = 0; i < ARM_ORDER.length; i++) {
+    const idx = (start + i) % ARM_ORDER.length;
+    const id = ARM_ORDER[idx];
+    const arm = AB_ARMS[id];
+    if (!arm.useRunnerGate || score >= (arm.minRunner || 0)) {
+      state._abCursor = (idx + 1) % ARM_ORDER.length;
+      return arm;
+    }
+  }
+  state._abCursor = (start + 1) % ARM_ORDER.length;
+  return AB_ARMS.CONTROL;
 }
 
 /** Profile risk overrides for a chosen mode letter (when arm doesn't force). */

@@ -65,7 +65,7 @@ const DS = 'https://api.dexscreener.com';
 
 const DEFAULTS = {
   startingBalance: 100,
-  minLiquidity: 38000,
+  minLiquidity: 15000,
   buyPctMin: 0.15,
   buyPctMax: 0.22,
   maxPositions: 3,
@@ -75,7 +75,7 @@ const DEFAULTS = {
   minScore: 70,
   strategyId: 'ab_harness',
   kellyCap: 0.18,
-  maxDailyLossPct: 0.15,
+  maxDailyLossPct: 0.12,
   cooldownMs: 5 * 60e3,
   takeProfitLadder: [
     { mult: 1.5, sellPct: 0.25 },
@@ -106,9 +106,11 @@ const DEFAULTS = {
   riskPerTradePct: 0.002, // 0.20% equity risk budget
   mintCooldownMs: 45 * 60e3, // no re-entry after normal exit
   mintStopBlacklistMs: 24 * 3600e3, // after hard stop / liq shock
-  dustUsd: 0.5, // force-close leftover dust to free slots
+  dustUsd: 1.0, // force-close leftover dust to free slots
   preferNovelMints: true,
   maxMoverPositions: 1,
+  minEntryLiquidity: 15000, // hard veto before buy
+  liqPullExitPct: 0.5, // exit if live liq < entry * this
 };
 
 function now() {
@@ -183,12 +185,14 @@ function defaultTimeStopMs(pos) {
 }
 
 function isDustPosition(pos, settings = {}) {
-  const dust = settings.dustUsd != null ? settings.dustUsd : 0.5;
+  const dust = settings.dustUsd != null ? settings.dustUsd : 1;
   const basis = Number(pos.remainingUsdBasis);
   const mark = Number(pos.markValue);
   if (basis >= 0 && basis < dust) return true;
-  if (mark >= 0 && mark < dust * 0.5 && basis < dust * 2) return true;
-  if ((Number(pos.tokens) || 0) > 0 && mark === 0 && basis < dust * 2) return true;
+  if (mark >= 0 && mark < dust && (basis < dust * 3 || !Number.isFinite(basis))) return true;
+  if ((Number(pos.tokens) || 0) > 0 && mark === 0 && basis < dust * 3) return true;
+  // Nonsense pnl% spam from near-zero marks
+  if (mark >= 0 && mark < 0.05 && basis < dust * 4) return true;
   return false;
 }
 
@@ -458,13 +462,37 @@ function migrateState(raw) {
       if (raw.settings.minRunnerScore == null) raw.settings.minRunnerScore = 40;
       if (raw.settings.mintCooldownMs == null) raw.settings.mintCooldownMs = 45 * 60e3;
       if (raw.settings.mintStopBlacklistMs == null) raw.settings.mintStopBlacklistMs = 24 * 3600e3;
-      if (raw.settings.dustUsd == null) raw.settings.dustUsd = 0.5;
+      if (raw.settings.dustUsd == null || raw.settings.dustUsd < 1) raw.settings.dustUsd = 1;
       if (raw.settings.preferNovelMints == null) raw.settings.preferNovelMints = true;
       if (raw.settings.maxMoverPositions == null) raw.settings.maxMoverPositions = 1;
+      if (raw.settings.minEntryLiquidity == null) raw.settings.minEntryLiquidity = 15000;
+      if (raw.settings.liqPullExitPct == null) raw.settings.liqPullExitPct = 0.5;
+      if ((raw.settings.minLiquidity || 0) < 15000) raw.settings.minLiquidity = 15000;
       // Resume paper after deploy if daily-loss flipped running off — exits + new entries
       // still honor cooldownUntil / killSwitch.
       if (raw.settings.running === false && !raw.killSwitch) {
         raw.settings.running = true;
+      }
+      // v18: clear stuck daily-loss / loss-streak halt so cooldown can auto-resume
+      const n = Date.now();
+      if (raw.cooldownUntil && raw.cooldownUntil < n) {
+        raw.cooldownUntil = 0;
+        if (raw.stats) raw.stats.lossStreak = 0;
+        if (raw.agents && raw.agents.risk) {
+          raw.agents.risk.lossStreak = 0;
+          raw.agents.risk.status = 'idle';
+          raw.agents.risk.cooldownUntil = 0;
+        }
+      }
+      // If daily-loss banner left us blocked with an expired or missing halt window, re-arm now.
+      if (!raw.dailyLossHaltUntil || raw.dailyLossHaltUntil < n) {
+        raw.dailyLossHaltUntil = 0;
+        if (!raw.dailyLossResumedDay) {
+          // rebase day start so dailyLossHit() clears after deploy resume
+          const eq = (raw.cash || 0) + (raw.positions || []).reduce((s, x) => s + (Number(x.markValue) || Number(x.remainingUsdBasis) || 0), 0);
+          if (eq > 0) raw.dayStartEquity = eq;
+          raw.dailyLossResumedDay = raw.dayKey || true;
+        }
       }
     }
     raw.ruggedDevs = raw.ruggedDevs || [];
@@ -1070,9 +1098,9 @@ class PaperEngine {
           p._laneGate = g;
           if (!g.ok) return false;
           // lane-specific liquidity floor (gates handle FRESH/GRAD/MOVER)
-          if (p.lane === LANE.MOVER && p.liquidity < (settings.minLiquidity || 25000)) return false;
-          if (p.lane === LANE.FRESH && p.liquidity > 0 && p.liquidity < ((settings.lanes && settings.lanes.freshMinLiq) || 2500)) return false;
-          if (p.lane === LANE.GRAD && p.liquidity > 0 && p.liquidity < ((settings.lanes && settings.lanes.gradMinLiq) || 8000)) return false;
+          if (p.lane === LANE.MOVER && p.liquidity < Math.max(15000, settings.minLiquidity || 15000)) return false;
+          if (p.lane === LANE.FRESH && p.liquidity > 0 && p.liquidity < ((settings.lanes && settings.lanes.freshMinLiq) || 5000)) return false;
+          if (p.lane === LANE.GRAD && p.liquidity > 0 && p.liquidity < Math.max(15000, (settings.lanes && settings.lanes.gradMinLiq) || 15000)) return false;
           return true;
         })
         .sort((a, b) => {
@@ -1115,21 +1143,49 @@ class PaperEngine {
         return;
       }
 
+      // Daily-loss: trip once → cooldown → auto-resume (rebase dayStartEquity). Do not extend forever.
       if (this.dailyLossHit()) {
-        state.agents.risk.flash = 'block';
-        state.cooldownUntil = Math.max(state.cooldownUntil || 0, now() + (settings.cooldownMs || 300000));
-        state.agents.risk.status = 'cooldown';
-        state.agents.risk.cooldownUntil = state.cooldownUntil;
-        setBanner(state, 'Daily loss limit hit — cooldown (exits still active)', null);
-        addActivity(state, { type: 'risk', symbol: '—', agent: 'Risk', detail: 'Daily loss limit / cooldown' });
-        this.persist();
-        this.emit();
-        return;
+        const coolMs = settings.lossStreakCooldownMs || settings.cooldownMs || 300000;
+        if (!state.dailyLossHaltUntil) {
+          state.dailyLossHaltUntil = now() + coolMs;
+          state.cooldownUntil = Math.max(state.cooldownUntil || 0, state.dailyLossHaltUntil);
+          state.agents.risk.flash = 'block';
+          state.agents.risk.status = 'cooldown';
+          state.agents.risk.cooldownUntil = state.cooldownUntil;
+          setBanner(state, 'Daily loss limit — cooling down (exits still active)', null);
+          addActivity(state, { type: 'risk', symbol: '—', agent: 'Risk', detail: 'Daily loss limit → cooldown then auto-resume' });
+        }
+        if (now() < state.dailyLossHaltUntil) {
+          state.agents.risk.status = 'cooldown';
+          this.persist();
+          this.emit();
+          return;
+        }
+        // Cooldown elapsed — auto-resume for the rest of the day
+        state.dailyLossHaltUntil = 0;
+        state.dailyLossResumedDay = state.dayKey || true;
+        state.dayStartEquity = equity(state); // rebase so dailyLossHit clears
+        state.stats.lossStreak = 0;
+        state.cooldownUntil = 0;
+        state.agents.risk.lossStreak = 0;
+        state.agents.risk.cooldownUntil = 0;
+        state.agents.risk.status = 'idle';
+        setBanner(state, 'Auto-resumed after daily-loss cooldown · Mode: PAPER', null);
+        addActivity(state, { type: 'risk', symbol: '—', agent: 'Risk', detail: 'Auto-resume after daily-loss cooldown' });
       }
       if (state.cooldownUntil && now() < state.cooldownUntil) {
         this.persist();
         this.emit();
         return;
+      }
+      // Loss-streak cooldown expired → clear streak so entries re-arm
+      if (state.cooldownUntil && now() >= state.cooldownUntil && (state.stats.lossStreak || 0) > 0) {
+        state.stats.lossStreak = 0;
+        state.agents.risk.lossStreak = 0;
+        state.agents.risk.cooldownUntil = 0;
+        if (state.agents.risk.status === 'cooldown') state.agents.risk.status = 'idle';
+        state.cooldownUntil = 0;
+        addActivity(state, { type: 'risk', symbol: '—', agent: 'Risk', detail: 'Loss-streak cooldown ended — re-armed' });
       }
 
       state.agents.analyst.status = 'scoring';
@@ -1265,6 +1321,37 @@ class PaperEngine {
     }
     if (state.positions.length >= settings.maxPositions) return null;
     if (!pair.priceUsd || pair.priceUsd <= 0) return null;
+    {
+      const minEntry = settings.minEntryLiquidity != null ? settings.minEntryLiquidity : 15000;
+      const liqNow = Number(pair.liquidity) || 0;
+      const laneGuess = pair.lane || LANE.MOVER;
+      const floor = laneGuess === LANE.FRESH ? Math.min(minEntry, 5000) : minEntry;
+      if (liqNow > 0 && liqNow < floor) {
+        addActivity(state, {
+          type: 'skip',
+          symbol: pair.symbol,
+          icon: pair.icon,
+          agent: 'Risk',
+          detail: `liq $${Math.round(liqNow)} < min $${floor}`,
+          mint: pair.mint,
+          lane: laneGuess,
+        });
+        return null;
+      }
+      // Price-impact veto: estimated sell of full size would exceed 12%
+      const notional = Math.min(equity(state) * (settings.buyPctMax || 0.14), state.cash * 0.95);
+      if (liqNow > 0 && notional / liqNow >= 0.12) {
+        addActivity(state, {
+          type: 'skip',
+          symbol: pair.symbol,
+          icon: pair.icon,
+          agent: 'Risk',
+          detail: `impact veto · est ${(100 * notional / liqNow).toFixed(1)}%`,
+          mint: pair.mint,
+        });
+        return null;
+      }
+    }
     const isReclaim = !!(pair.breakdown || []).some((b) => b && b.k === 'reentry');
     const block = mintBlocked(state, pair.mint, { allowScalpReclaim: isReclaim });
     if (block.blocked) return null;
@@ -1291,9 +1378,11 @@ class PaperEngine {
       return null;
     }
     // A/B harness arm + runner mode
-    const arm = settings.abHarness === false ? AB_ARMS.CONTROL : pickArm(state);
     const rScore = Number(pair.runnerScore) || 0;
-    if (arm.useRunnerGate && rScore < (arm.minRunner || 40)) {
+    const arm = settings.abHarness === false ? AB_ARMS.CONTROL : pickArm(state, rScore);
+    // pickArm already falls through when gate fails; keep a soft log only if CONTROL substituted
+    if (arm.useRunnerGate && rScore < (arm.minRunner || 30)) {
+      // Should be rare after pickArm fallthrough — skip rather than take under-gated treatment
       addActivity(state, {
         type: 'skip',
         symbol: pair.symbol,
@@ -1437,6 +1526,7 @@ class PaperEngine {
       pnl: 0,
       pnlPct: 0,
       liquidity: pair.liquidity,
+      entryLiquidity: pair.liquidity,
       marketCap: pair.marketCap,
       volumeH24: pair.volumeH24,
       dexId: pair.dexId,
@@ -1599,11 +1689,17 @@ class PaperEngine {
       // Protective exits always run (even during buy cooldown). Only killSwitch freezes exits.
       if (state.killSwitch) continue;
 
-      // Liquidity shock — impact-based exit (all modes)
+      // Liquidity shock / pull / impact exit (all modes) — stop % alone can't save rugs
       const shockLim = pos.liquidityShockPct != null ? pos.liquidityShockPct : 0.1;
       const impactEst = estimateSellImpactPct(pos, 1);
-      if (impactEst >= shockLim || (pos.liquidity > 0 && live.liquidity > 0 && live.liquidity < pos.liquidity * 0.35)) {
-        closes.push({ pos, reason: 'liq_shock', label: 'Risk liquidity shock', sellPct: 1 });
+      const entryLiq = Number(pos.entryLiquidity != null ? pos.entryLiquidity : pos.liquidity) || 0;
+      const liveLiq = Number(live.liquidity) || 0;
+      const pullPct = settings.liqPullExitPct != null ? settings.liqPullExitPct : 0.5;
+      const absFloor = Math.max(5000, (settings.minEntryLiquidity || 15000) * 0.4);
+      const liqPulled = entryLiq > 0 && liveLiq > 0 && liveLiq < entryLiq * pullPct;
+      const liqGone = liveLiq > 0 && liveLiq < absFloor && (entryLiq <= 0 || liveLiq < entryLiq * 0.7);
+      if (impactEst >= shockLim || liqPulled || liqGone || (pos.liquidity > 0 && liveLiq > 0 && liveLiq < pos.liquidity * 0.35)) {
+        closes.push({ pos, reason: 'liq_shock', label: 'Risk liquidity pull / impact', sellPct: 1 });
         continue;
       }
 
@@ -1784,10 +1880,12 @@ class PaperEngine {
 
     let pct = clamp(Number(sellPct) || 1, 0.01, 1);
     // Never leave dust remnants that spam the feed / occupy slots
-    const dust = (state.settings && state.settings.dustUsd) || 0.5;
+    const dust = (state.settings && state.settings.dustUsd) || 1;
     const remBasis = Number(pos.remainingUsdBasis) || 0;
+    const remMark = Number(pos.markValue) || 0;
     if (pct < 0.999 && remBasis * (1 - pct) < dust) pct = 1;
-    if (reason === 'dust') pct = 1;
+    if (pct < 0.999 && remMark * (1 - pct) < dust) pct = 1;
+    if (reason === 'dust' || isDustPosition(pos, state.settings)) pct = 1;
     const tokensToSell = pos.tokens * pct;
     if (tokensToSell <= 0) return null;
 
@@ -1826,7 +1924,9 @@ class PaperEngine {
     const feeDrag = round((fill.priorityFeeSol || 0) * 150, 4);
     const basis = round(pos.remainingUsdBasis * pct, 4);
     const pnl = round(proceeds - basis - feeDrag * 0.25, 4);
-    const pnlPct = basis > 0 ? round((pnl / basis) * 100, 2) : 0;
+    let pnlPct = basis > 0 ? round((pnl / basis) * 100, 2) : 0;
+    if (basis < dust || Math.abs(pnlPct) > 500) pnlPct = basis > 0 ? round((pnl / Math.max(basis, dust)) * 100, 2) : 0;
+    const silentDust = reason === 'dust' || (proceeds < 0.05 && remBasis < dust * 2);
 
     state.cash = round(state.cash + proceeds - feeDrag * 0.25, 4);
     state.dayRealizedPnl = round((state.dayRealizedPnl || 0) + pnl, 4);
@@ -1868,7 +1968,7 @@ class PaperEngine {
     state.agents.risk.guarding = state.positions[0] ? state.positions[0].symbol : null;
 
     // stats + feedback loop
-    if (fullClose || reason === 'tp') {
+    if ((fullClose || reason === 'tp') && reason !== 'dust') {
       state.stats.realizedPnl = round((state.stats.realizedPnl || 0) + pnl, 4);
       if (pnl >= 0) {
         state.stats.wins = (state.stats.wins || 0) + 1;
@@ -1936,57 +2036,59 @@ class PaperEngine {
     const modeBit = pos.tradeMode ? ` · ${pos.tradeMode}` : '';
     const armBit = pos.abArm ? ` · ${pos.abArm}` : '';
     const rBit = pos.runnerScore != null ? ` · R${pos.runnerScore}` : '';
-    addActivity(state, {
-      type,
-      symbol: pos.symbol,
-      icon: pos.icon,
-      agent: label || (reason === 'whale' ? 'Whale Watch' : 'Risk'),
-      detail:
-        reason === 'whale'
-          ? label
-          : reason === 'tp'
-            ? `${pos.lane || ''} ladder ${Math.round(pct * 100)}%${modeBit}${armBit}${rBit}`.trim()
-            : reason === 'spike'
-              ? `${pos.lane || ''} spike ${Math.round(pct * 100)}%${modeBit}${armBit}`.trim()
-              : reason === 'liq_shock'
-                ? `${pos.lane || ''} liq shock${modeBit}${armBit}`.trim()
-                : reason === 'flow'
-                  ? `${pos.lane || ''} neg-flow${modeBit}`.trim()
-                  : reason === 'stop'
-                    ? `${pos.lane || ''} hard stop${modeBit}${armBit}${rBit}`.trim()
-                    : reason === 'time'
-                      ? `${pos.lane || 'FRESH'} time-stop${modeBit}`
-                      : reason === 'dust'
-                        ? `${pos.lane || ''} dust sweep${modeBit}`.trim()
-                      : `${pos.lane || ''} trailing stop${modeBit}${armBit}`.trim(),
-      amountUsd: proceeds,
-      pnl,
-      pnlPct,
-      mint: pos.mint,
-      lane: pos.lane || null,
-      abArm: pos.abArm || null,
-      tradeMode: pos.tradeMode || null,
-      runnerScore: pos.runnerScore != null ? pos.runnerScore : null,
-    });
+    if (!silentDust) {
+      addActivity(state, {
+        type,
+        symbol: pos.symbol,
+        icon: pos.icon,
+        agent: label || (reason === 'whale' ? 'Whale Watch' : 'Risk'),
+        detail:
+          reason === 'whale'
+            ? label
+            : reason === 'tp'
+              ? `${pos.lane || ''} ladder ${Math.round(pct * 100)}%${modeBit}${armBit}${rBit}`.trim()
+              : reason === 'spike'
+                ? `${pos.lane || ''} spike ${Math.round(pct * 100)}%${modeBit}${armBit}`.trim()
+                : reason === 'liq_shock'
+                  ? `${pos.lane || ''} liq pull / impact${modeBit}${armBit}`.trim()
+                  : reason === 'flow'
+                    ? `${pos.lane || ''} neg-flow${modeBit}`.trim()
+                    : reason === 'stop'
+                      ? `${pos.lane || ''} hard stop${modeBit}${armBit}${rBit}`.trim()
+                      : reason === 'time'
+                        ? `${pos.lane || 'FRESH'} time-stop${modeBit}`
+                        : reason === 'dust'
+                          ? `${pos.lane || ''} dust sweep${modeBit}`.trim()
+                        : `${pos.lane || ''} trailing stop${modeBit}${armBit}`.trim(),
+        amountUsd: proceeds,
+        pnl,
+        pnlPct,
+        mint: pos.mint,
+        lane: pos.lane || null,
+        abArm: pos.abArm || null,
+        tradeMode: pos.tradeMode || null,
+        runnerScore: pos.runnerScore != null ? pos.runnerScore : null,
+      });
 
-    const sign = pnl >= 0 ? '+' : '';
-    setBanner(
-      state,
-      `${reason === 'whale' ? 'Whale exit' : reason === 'stop' ? 'Stopped' : reason === 'tp' ? 'TP' : 'Sold'} ${pos.symbol} · ${sign}$${Math.abs(pnl).toFixed(2)} (${sign}${pnlPct}%)`,
-      pos.icon
-    );
+      const sign = pnl >= 0 ? '+' : '';
+      setBanner(
+        state,
+        `${reason === 'whale' ? 'Whale exit' : reason === 'stop' ? 'Stopped' : reason === 'tp' ? 'TP' : reason === 'liq_shock' ? 'Liq exit' : 'Sold'} ${pos.symbol} · ${sign}$${Math.abs(pnl).toFixed(2)} (${sign}${pnlPct}%)`,
+        pos.icon
+      );
 
-    state.notifications.unshift({
-      id: uid('n'),
-      ts: now(),
-      title: `${reason === 'whale' ? 'Whale exit' : reason === 'stop' ? 'Stopped' : 'Sold'} ${pos.symbol}`,
-      body: `${sign}$${Math.abs(pnl).toFixed(2)} (${sign}${pnlPct}%)`,
-      icon: pos.icon,
-      symbol: pos.symbol,
-      pnl,
-      pnlPct,
-    });
-    if (state.notifications.length > 20) state.notifications = state.notifications.slice(0, 20);
+      state.notifications.unshift({
+        id: uid('n'),
+        ts: now(),
+        title: `${reason === 'whale' ? 'Whale exit' : reason === 'stop' ? 'Stopped' : 'Sold'} ${pos.symbol}`,
+        body: `${sign}$${Math.abs(pnl).toFixed(2)} (${sign}${pnlPct}%)`,
+        icon: pos.icon,
+        symbol: pos.symbol,
+        pnl,
+        pnlPct,
+      });
+      if (state.notifications.length > 20) state.notifications = state.notifications.slice(0, 20);
+    }
 
     pushEquity(state);
     this.persist();

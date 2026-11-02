@@ -17,7 +17,7 @@ const DEFAULT_LANE_CAPS = {
 const LANE_DEFAULTS = {
   maxMarketCapUsd: 8_000_000,
   freshMaxAgeMs: 25 * 60e3,
-  freshMinLiq: 2500,
+  freshMinLiq: 5000,
   freshMaxLiq: 120000,
   freshMaxMcap: 350_000,
   freshBuyPctMult: 0.55, // smaller size
@@ -33,7 +33,7 @@ const LANE_DEFAULTS = {
   gradMaxProgress: 0.98,
   gradMaxAgeMs: 6 * 3600e3,
   gradMigratedMaxAgeMs: 30 * 60e3,
-  gradMinLiq: 8000,
+  gradMinLiq: 15000,
   gradBuyPctMult: 0.75,
   moverMinLiq: null, // use settings.minLiquidity
   moverBuyPctMult: 0.7,

@@ -222,19 +222,20 @@ function runnerScore(pair, ctx = {}) {
   score = clamp(Math.round(score - penalties), 0, 100);
 
   let band = 'skip';
-  if (score >= 80 && penalties === 0) band = 'high';
-  else if (score >= 70) band = 'moon';
-  else if (score >= 55) band = 'standard';
-  else if (score >= 40) band = 'scalp';
+  // Recalibrated for free-data score distribution (was 40/55/70/80 — T arms never filled)
+  if (score >= 65 && penalties === 0) band = 'high';
+  else if (score >= 52) band = 'moon';
+  else if (score >= 42) band = 'standard';
+  else if (score >= 30) band = 'scalp';
 
   return { score, components, penalties, veto: null, band, breakdown };
 }
 
 function runnerBandAction(score) {
-  if (score < 40) return { ok: false, modeHint: null, sizeMult: 0 };
-  if (score < 55) return { ok: true, modeHint: 'B', sizeMult: 0.5 };
-  if (score < 70) return { ok: true, modeHint: 'A', sizeMult: 0.85 };
-  if (score < 80) return { ok: true, modeHint: 'C', sizeMult: 1 };
+  if (score < 30) return { ok: false, modeHint: null, sizeMult: 0 };
+  if (score < 42) return { ok: true, modeHint: 'B', sizeMult: 0.5 };
+  if (score < 52) return { ok: true, modeHint: 'A', sizeMult: 0.85 };
+  if (score < 65) return { ok: true, modeHint: 'C', sizeMult: 1 };
   return { ok: true, modeHint: 'C', sizeMult: 1, wideTrail: true };
 }
 

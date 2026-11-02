@@ -53,9 +53,11 @@ async function scorePair(pair, settings, ctx = {}) {
 
   const lane = pair.lane || (pair._laneInfo && pair._laneInfo.lane) || null;
   const liq = pair.liquidity || 0;
-  let minLiq = settings.minLiquidity || 38000;
-  if (lane === LANE.FRESH) minLiq = Math.min(minLiq, (settings.lanes && settings.lanes.freshMinLiq) || 2500);
-  else if (lane === LANE.GRAD) minLiq = Math.min(minLiq, (settings.lanes && settings.lanes.gradMinLiq) || 8000);
+  let minLiq = settings.minLiquidity || 15000;
+  // Absolute floor $15k on GRAD/MOVER to avoid rug fills through %-stops; FRESH slightly softer.
+  if (lane === LANE.FRESH) minLiq = Math.max(5000, Math.min(minLiq, (settings.lanes && settings.lanes.freshMinLiq) || 5000));
+  else if (lane === LANE.GRAD) minLiq = Math.max(15000, (settings.lanes && settings.lanes.gradMinLiq) || 15000);
+  else minLiq = Math.max(15000, minLiq);
   if (liq < minLiq) {
     return { score: 0, pass: false, breakdown: [{ k: 'liquidity', v: 0, note: `below min $${minLiq}` }], rug: null, lane };
   }

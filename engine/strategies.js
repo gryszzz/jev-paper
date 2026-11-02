@@ -180,8 +180,8 @@ const PRESETS = {
   ab_harness: {
     id: 'ab_harness',
     label: 'A/B Harness',
-    minLiquidity: 8000,
-    minScore: 58,
+    minLiquidity: 15000,
+    minScore: 52,
     buyPctMin: 0.08,
     buyPctMax: 0.14,
     maxPositions: 3,

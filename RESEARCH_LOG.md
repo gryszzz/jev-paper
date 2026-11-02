@@ -6,6 +6,18 @@
 
 ---
 
+
+## 2026-11-02 — v18 auto-resume / liq floor / T-arm recal / compact desk
+
+### Tuning audit findings addressed
+1. **Halted forever** after 12% daily-loss + 3-loss cooldown: `dailyLossHit()` re-extended `cooldownUntil` every tick. Now trips once → cooldown → **auto-resume** (rebase `dayStartEquity`, clear loss streak). Loss-streak cooldown expiry also re-arms.
+2. **Dust spam** (WASTED $0 / −5700%): dustUsd $1, force full close, silent micro-dust activity, dust excluded from loss-streak.
+3. **Rug grads through %-stop**: hard **$15k** min liquidity (GRAD/MOVER), pre-buy impact veto, store `entryLiquidity`, exit on liq pull (<50% entry or <abs floor) / impact.
+4. **T1–T3 starved**: free-data runner cutoffs lowered (T1 38 / T2 30 / T3 48); bands 30/42/52/65; `pickArm(score)` falls through when gate fails.
+5. **UI**: trades list one tight line; header **only plain text J.** (white J + neon green period, no box/glow/tagline); SW cache `jev-paper-v18`.
+
+X buzz remains enabled (`x-api`); bearer on Render still returns HTTP 401 from counts/recent (token invalid for Twitter API — needs a valid app bearer). LIVE_ENABLED=false.
+
 ## 0. Base-rate reality (why filters beat hope)
 
 | Finding | Number | Source |
