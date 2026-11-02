@@ -878,6 +878,32 @@ class PaperEngine {
     const wallet = msg.traderPublicKey || msg.owner || msg.account;
     const side = (msg.txType || msg.side || '').toLowerCase();
     if (!mint || !wallet) return;
+    // Accumulate unique-buyer / volume traction for FRESH hard gates
+    try {
+      state._mintTraction = state._mintTraction || {};
+      const tr = state._mintTraction[mint] || { buyers: [], buys: 0, sells: 0, volUsd: 0, lastTs: 0 };
+      const solAmt = Number(msg.solAmount || msg.sol || msg.amountSol || 0) || 0;
+      const usdHint = Number(process.env.SOL_USD_HINT) || 180;
+      const usd = Number(msg.usdAmount || msg.amountUsd || 0) || (solAmt > 0 ? solAmt * usdHint : 0);
+      const isBuy = side === 'buy' || side === 'buys';
+      const isSell = side === 'sell' || side === 'sells';
+      if (isBuy) {
+        tr.buys = (tr.buys || 0) + 1;
+        if (wallet && !tr.buyers.includes(wallet)) {
+          tr.buyers.push(wallet);
+          if (tr.buyers.length > 200) tr.buyers = tr.buyers.slice(-200);
+        }
+      } else if (isSell) {
+        tr.sells = (tr.sells || 0) + 1;
+      }
+      if (usd > 0) tr.volUsd = (tr.volUsd || 0) + usd;
+      tr.lastTs = now();
+      state._mintTraction[mint] = tr;
+      const keys = Object.keys(state._mintTraction);
+      if (keys.length > 400) {
+        for (const k of keys.slice(0, keys.length - 300)) delete state._mintTraction[k];
+      }
+    } catch (_) {}
     const reg = ensureRegistry(state);
     const smart = isSmartWallet(reg, wallet);
     const pos = state.positions.find((p) => p.mint === mint);
@@ -1411,6 +1437,24 @@ class PaperEngine {
       try {
         state._telegramMentions = telegramMentionsFromPairs(pairs);
       } catch (_) { state._telegramMentions = []; }
+      // Merge WS-accumulated unique buyers / vol into pairs (covers DexScreener lag)
+      state._mintTraction = state._mintTraction || {};
+      try {
+        const watch = [];
+        for (const p of pairs) {
+          const tr = state._mintTraction[p.mint];
+          if (tr) {
+            const ub = (tr.buyers && tr.buyers.length) || 0;
+            if (ub > (Number(p.uniqueBuyers) || 0)) p.uniqueBuyers = ub;
+            if ((tr.buys || 0) > (Number(p.buysM5) || 0)) p.buysM5 = tr.buys;
+            if ((tr.sells || 0) > (Number(p.sellsM5) || 0)) p.sellsM5 = tr.sells;
+            if ((tr.volUsd || 0) > (Number(p.volumeM5) || 0)) p.volumeM5 = Math.round(tr.volUsd);
+            p._wsTraction = { uniqueBuyers: ub, buys: tr.buys || 0, volUsd: tr.volUsd || 0 };
+          }
+          if (p.lane === LANE.FRESH || p.fromPump) watch.push(p.mint);
+        }
+        if (watch.length) feed.watchTokenTrades(watch.slice(0, 40));
+      } catch (_) {}
       const copyMap = eyes.annotateCopycats(pairs);
       // Persist recent icons/names for cross-scan image/name dedupe (memory, capped)
       state._seenTokenMeta = state._seenTokenMeta || [];
