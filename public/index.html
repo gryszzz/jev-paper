@@ -7,19 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="JEV — Solana memecoin paper-trading agents. Mode: PAPER. No real money." />
-  <link rel="manifest" href="/manifest.json?v=21.8" />
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=21.8" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=21.8" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=21.8" />
+  <link rel="manifest" href="/manifest.json?v=21.9" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=21.9" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=21.9" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=21.9" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <title>JEV Paper</title>
-  <link rel="stylesheet" href="/styles.css?v=21.8" />
+  <link rel="stylesheet" href="/styles.css?v=21.9" />
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hide">
-    <img src="/img/j-logo.svg?v=21.8" alt="JEV" class="lock-logo" />
+    <img src="/img/j-logo.svg?v=21.9" alt="JEV" class="lock-logo" />
     <h1>JEV</h1>
     <p>Enter passcode to control agents</p>
     <input id="passInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Passcode" />
@@ -97,18 +97,31 @@
 
     <main id="view-stats" class="view">
       <h1 class="page-title">Stats</h1>
-      <div class="stats-cards" id="statsCards"></div>
+      <div class="stats-kpi" id="statsCards"></div>
       <h2 class="subhead">By lane</h2>
       <div id="laneStats" class="strategy-stats"></div>
-      <h2 class="subhead">A/B arms (Control vs T1–T3)</h2>
-      <div id="armStats" class="strategy-stats"></div>
-      <h2 class="subhead">By mode (SCALP / RIDE / MOON)</h2>
+      <h2 class="subhead">By mode</h2>
       <div id="modeStats" class="strategy-stats"></div>
-      <h2 class="subhead">By strategy</h2>
-      <div id="strategyStats" class="strategy-stats"></div>
-      <h2 class="subhead">Data latency (free tier)</h2>
+      <h2 class="subhead">A/B arms</h2>
+      <div id="armStats" class="strategy-stats"></div>
+      <h2 class="subhead">By signal</h2>
+      <div id="signalStats" class="strategy-stats"></div>
+      <div class="stats-split">
+        <div>
+          <h2 class="subhead">Best 5</h2>
+          <div id="bestTrades" class="strategy-stats"></div>
+        </div>
+        <div>
+          <h2 class="subhead">Worst 5</h2>
+          <div id="worstTrades" class="strategy-stats"></div>
+        </div>
+      </div>
+      <h2 class="subhead">Hold · rugs · learner</h2>
+      <div id="metaStats" class="strategy-stats"></div>
+      <div id="learnStats" class="learn-stats"></div>
+      <h2 class="subhead">Feed · latency</h2>
       <div id="latencyStats" class="strategy-stats"></div>
-      <h2 class="subhead">Smart wallets (mined)</h2>
+      <h2 class="subhead">Smart wallets</h2>
       <div id="smartWalletStats" class="whale-stats"></div>
       <h2 class="subhead">Whale Watch</h2>
       <div id="whaleStats" class="whale-stats"></div>
@@ -195,7 +208,7 @@
       </button>
     </nav>
   </div>
-  <script src="/floor.js?v=21.8"></script>
-  <script src="/app.js?v=21.8"></script>
+  <script src="/floor.js?v=21.9"></script>
+  <script src="/app.js?v=21.9"></script>
 </body>
 </html>

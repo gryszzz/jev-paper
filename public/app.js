@@ -631,75 +631,126 @@
   function renderStats() {
     if (!state) return;
     const st = state.stats || {};
-    const winRate = st.wins + st.losses > 0 ? Math.round((st.wins / (st.wins + st.losses)) * 100) : 0;
-    $('statsCards').innerHTML = [
-      ['Realized PnL', money(st.realizedPnl || 0)],
-      ['Win rate', `${winRate}%`],
-      ['Trades', String(st.trades || 0)],
-      ['Whale exits', String(st.whaleExits || 0)],
-      ['Best', money(st.bestTrade || 0)],
-      ['Worst', money(st.worstTrade || 0)],
-      ['Avg whale react', `${st.avgWhaleLatencyMs || 0} ms`],
-      ['Day PnL', money(state.dayPnl || 0)],
-      ['Failed tx (sim)', String(st.failedTx || 0)],
-      ['Sandwiched (sim)', String(st.sandwiched || 0)],
-    ]
-      .map(([lbl, val]) => `<div class="stat-card"><div class="lbl">${lbl}</div><div class="val">${val}</div></div>`)
+    const ts = state.tradeStats || {};
+    const trades = ts.trades != null ? ts.trades : (st.trades || 0);
+    const wins = ts.wins != null ? ts.wins : (st.wins || 0);
+    const losses = ts.losses != null ? ts.losses : (st.losses || 0);
+    const realized = ts.realizedPnl != null ? ts.realizedPnl : (st.realizedPnl || 0);
+    const winRate = ts.winRate != null ? Math.round(ts.winRate * 100) : (wins + losses > 0 ? Math.round((wins / (wins + losses)) * 100) : 0);
+    const expectancy = ts.expectancy != null ? ts.expectancy : (trades ? realized / trades : 0);
+    const avgWin = ts.avgWin || 0;
+    const avgLoss = ts.avgLoss || 0;
+    const pf = ts.profitFactor != null ? ts.profitFactor : 0;
+    const maxDd = ts.maxDrawdownPct != null ? ts.maxDrawdownPct : 0;
+    const pnlCls = (n) => (n > 0 ? 'pos' : n < 0 ? 'neg' : '');
+    const fmtPf = pf >= 999 ? '∞' : (pf ? pf.toFixed(2) : '—');
+    const cards = [
+      ['Realized P&L', money(realized), pnlCls(realized)],
+      ['Win rate', `${winRate}%`, winRate >= 50 ? 'pos' : winRate > 0 ? '' : ''],
+      ['Expectancy', money(expectancy), pnlCls(expectancy)],
+      ['Avg W / L', `${money(avgWin)} / ${money(avgLoss)}`, ''],
+      ['Profit factor', fmtPf, pf >= 1 ? 'pos' : pf > 0 ? 'neg' : ''],
+      ['Max DD', `${maxDd}%`, maxDd > 20 ? 'neg' : ''],
+      ['Trades', String(trades), ''],
+      ['Reserve', money(state.solReserve || 0), ''],
+    ];
+    $('statsCards').innerHTML = cards
+      .map(([lbl, val, cls]) => `<div class="stat-card"><div class="lbl">${lbl}</div><div class="val ${cls}">${val}</div></div>`)
       .join('');
 
+    const row = (left, right, extra = '') =>
+      `<div class="strategy-row"><span>${left}</span><strong class="${extra}">${right}</strong></div>`;
+
     const byLane = st.byLane || {};
-    const laneKeys = ['FRESH', 'GRAD', 'MOVER'].filter((k) => byLane[k]);
     const laneEl = $('laneStats');
     if (laneEl) {
-      laneEl.innerHTML = laneKeys.length
-        ? laneKeys
-            .map((k) => {
-              const r = byLane[k] || {};
-              return `<div class="strategy-row"><span class="tr-lane lane-${k.toLowerCase()}">${k}</span><strong>${r.buys || r.trades || 0} buys · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L</strong></div>`;
-            })
-            .join('')
-        : '<div class="strategy-row"><span>No lane fills yet</span></div>';
+      laneEl.innerHTML = ['FRESH', 'GRAD', 'MOVER']
+        .map((k) => {
+          const r = byLane[k] || {};
+          const n = r.trades || 0;
+          return row(
+            `<span class="tr-lane lane-${k.toLowerCase()}">${k}</span>`,
+            `${n} · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L`,
+            pnlCls(r.pnl || 0)
+          );
+        })
+        .join('');
+    }
+
+    const modeEl = $('modeStats');
+    if (modeEl) {
+      const byMode = st.byMode || {};
+      modeEl.innerHTML = ['SCALP', 'RIDE', 'MOON']
+        .map((k) => {
+          const r = byMode[k] || {};
+          return row(
+            `<span class="tr-mode mode-${k.toLowerCase()}">${k}</span>`,
+            `${r.trades || 0} · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L`,
+            pnlCls(r.pnl || 0)
+          );
+        })
+        .join('');
     }
 
     const armEl = $('armStats');
     if (armEl) {
       const byArm = st.byArm || {};
-      const armKeys = ['CONTROL', 'T1', 'T2', 'T3'].filter((k) => byArm[k]);
-      armEl.innerHTML = armKeys.length
-        ? armKeys
-            .map((k) => {
-              const r = byArm[k] || {};
-              const n = r.trades || 0;
-              const exp = n ? (r.pnl || 0) / n : 0;
-              return `<div class="strategy-row"><span class="tr-arm">${k}</span><strong>${r.buys || 0} buys · ${n} closed · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L · E ${money(exp)}</strong></div>`;
-            })
-            .join('')
-        : '<div class="strategy-row"><span>A/B harness waiting for fills</span></div>';
-    }
-    const modeEl = $('modeStats');
-    if (modeEl) {
-      const byMode = st.byMode || {};
-      const modeKeys = ['SCALP', 'RIDE', 'MOON'].filter((k) => byMode[k]);
-      modeEl.innerHTML = modeKeys.length
-        ? modeKeys
-            .map((k) => {
-              const r = byMode[k] || {};
-              return `<div class="strategy-row"><span class="tr-mode mode-${k.toLowerCase()}">${k}</span><strong>${r.trades || 0} · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L</strong></div>`;
-            })
-            .join('')
-        : '<div class="strategy-row"><span>No mode-tagged closes yet</span></div>';
+      armEl.innerHTML = ['CONTROL', 'T1', 'T2', 'T3']
+        .map((k) => {
+          const r = byArm[k] || {};
+          const n = r.trades || 0;
+          const exp = n ? (r.pnl || 0) / n : 0;
+          return row(
+            `<span class="tr-arm">${k}</span>`,
+            `${n} · ${money(r.pnl || 0)} · E ${money(exp)}`,
+            pnlCls(r.pnl || 0)
+          );
+        })
+        .join('');
     }
 
-    const by = st.byStrategy || {};
-    const keys = Object.keys(by);
-    $('strategyStats').innerHTML = keys.length
-      ? keys
-          .map((k) => {
-            const r = by[k];
-            return `<div class="strategy-row"><span>${k}</span><strong>${r.trades} trades · ${money(r.pnl)} · ${r.wins}W</strong></div>`;
-          })
-          .join('')
-      : '<div class="strategy-row"><span>No closed trades yet</span></div>';
+    const sigEl = $('signalStats');
+    if (sigEl) {
+      const bySig = ts.bySignal || {};
+      const keys = Object.keys(bySig).sort((a, b) => (bySig[b].pnl || 0) - (bySig[a].pnl || 0));
+      sigEl.innerHTML = keys.length
+        ? keys
+            .map((k) => {
+              const r = bySig[k];
+              return row(k.replace(/_/g, ' '), `${r.trades} · ${money(r.pnl)} · ${r.wins || 0}W/${r.losses || 0}L`, pnlCls(r.pnl || 0));
+            })
+            .join('')
+        : row('—', 'No signal-tagged closes yet');
+    }
+
+    const tradeRow = (t) => {
+      if (!t) return '';
+      const hold = t.holdMs ? (t.holdMs < 60000 ? Math.round(t.holdMs / 1000) + 's' : Math.round(t.holdMs / 60000) + 'm') : '—';
+      return row(
+        `${t.symbol || '—'} · ${t.lane || ''}`,
+        `${money(t.pnl)} (${t.pnlPct || 0}%) · ${hold}`,
+        pnlCls(t.pnl || 0)
+      );
+    };
+    const bestEl = $('bestTrades');
+    if (bestEl) bestEl.innerHTML = (ts.best5 || []).length ? ts.best5.map(tradeRow).join('') : row('—', 'n/a');
+    const worstEl = $('worstTrades');
+    if (worstEl) worstEl.innerHTML = (ts.worst5 || []).length ? ts.worst5.map(tradeRow).join('') : row('—', 'n/a');
+
+    const meta = $('metaStats');
+    if (meta) {
+      const hold = ts.avgHoldMs || 0;
+      const holdLbl = hold < 60000 ? Math.round(hold / 1000) + 's' : Math.round(hold / 60000) + 'm';
+      const inv = state.wealthInvariant || {};
+      meta.innerHTML = [
+        row('Avg hold', holdLbl),
+        row('Rug / hard stops', `${ts.rugStops || st.rugStops || 0} / ${ts.hardStops || 0}`),
+        row('Sweeps locked', `${st.sweeps || 0} · ${money(st.sweptUsd || 0)}`),
+        row('Books', inv.ok === false ? `drift ${money(inv.drift || 0)}` : 'invariant ok', inv.ok === false ? 'neg' : 'pos'),
+      ].join('');
+    }
+
+    // learner block filled by renderLearn into #learnStats
 
     const latEl = $('latencyStats');
     if (latEl) {
@@ -707,50 +758,40 @@
       const rt = dl.realtime || state.realtime || {};
       const rpc = dl.rpc || {};
       const rows = [
-        ['PumpPortal WS', rt.connected ? 'up' : 'down', rt.avgEventLatencyMs != null ? rt.avgEventLatencyMs + 'ms avg' : (rt.lastPingMs != null ? rt.lastPingMs + 'ms ping' : '—')],
-        ['RPC WS (free)', rt.rpcWsConnected ? 'up' : 'off', rpc.avgMs != null ? rpc.avgMs + 'ms avg' : '—'],
-        ['RPC rotate', (rpc.endpoints || 0) + ' eps', rpc.lastMs != null ? rpc.lastMs + 'ms last' : '—'],
-        ['Executor fill', dl.executorMs != null ? dl.executorMs + 'ms' : '—', 'jito+mev sim'],
-        ['Whale poll', dl.whaleMs != null ? dl.whaleMs + 'ms' : '—', 'holders'],
-        ['Helius', rt.heliusConfigured || rpc.helius ? 'optional free' : 'unset', 'not required'],
-        ['X buzz', (state.xBuzz && state.xBuzz.mode) || 'stub', (state.xBuzz && state.xBuzz.authFails) ? ('auth-fail×' + state.xBuzz.authFails) : ((state.xBuzz && state.xBuzz.enabled) ? ('on · ' + (state.xBuzz.signals || 0) + ' sig') : 'off')],
-        ['Catalyst', (state.catalyst && state.catalyst.mode) || '—', (state.catalyst ? ((state.catalyst.signals || 0) + ' sig · ' + (state.catalyst.matches || 0) + ' match') : '—')],
-        ['Copy leaders', (state.smartWalletMiner && state.smartWalletMiner.copy && state.smartWalletMiner.copy.source) || '—', (state.smartWalletMiner && state.smartWalletMiner.copy) ? ((state.smartWalletMiner.copy.fetched || 0) + ' fetched · ' + (state.smartWalletMiner.copy.promoted || 0) + ' promo') : 'pending'],
+        ['PumpPortal WS', rt.connected ? 'up' : 'down', rt.avgEventLatencyMs != null ? rt.avgEventLatencyMs + 'ms' : '—'],
+        ['X buzz', (state.xBuzz && state.xBuzz.mode) || 'stub', (state.xBuzz && state.xBuzz.authFails) ? ('auth-fail×' + state.xBuzz.authFails) : ((state.xBuzz && state.xBuzz.enabled) ? 'on' : 'off')],
+        ['Catalyst', (state.catalyst && state.catalyst.mode) || '—', state.catalyst ? ((state.catalyst.matches || 0) + ' match') : '—'],
+        ['Copy leaders', (state.smartWalletMiner && state.smartWalletMiner.copy && state.smartWalletMiner.copy.source) || '—', (state.smartWalletMiner && state.smartWalletMiner.copy) ? ((state.smartWalletMiner.copy.promoted || 0) + ' promo') : '—'],
+        ['RPC', rt.rpcWsConnected ? 'up' : 'off', rpc.avgMs != null ? rpc.avgMs + 'ms' : '—'],
       ];
-      latEl.innerHTML = rows
-        .map(([a, b, c]) => `<div class="strategy-row"><span>${a}</span><strong>${b} · ${c}</strong></div>`)
-        .join('');
+      latEl.innerHTML = rows.map(([a, b, c]) => row(a, `${b} · ${c}`)).join('');
     }
 
     const smEl = $('smartWalletStats');
     if (smEl) {
-      const top = (state.smartMoneyTop || (state.smartWalletMiner && state.smartWalletMiner.top) || []).slice(0, 8);
+      const top = (state.smartMoneyTop || (state.smartWalletMiner && state.smartWalletMiner.top) || []).slice(0, 6);
       smEl.innerHTML = top.length
         ? top
             .map((w) => {
               const addr = w.address || '';
-              return `<div class="whale-row"><span>${w.label || 'wallet'} · ${shortAddr(addr)}</span><strong>score ${Math.round(w.score || 0)} · ${w.buys || 0}B/${w.sells || 0}S${w.mined ? ' · mined' : ''}${w.copy ? ' · copy' : ''}</strong></div>`;
+              return row(`${w.label || 'wallet'} · ${shortAddr(addr)}`, `sc ${Math.round(w.score || 0)}${w.copy ? ' · copy' : ''}`);
             })
             .join('')
-        : '<div class="whale-row"><span>Miner idle — will populate from launches</span></div>';
+        : row('—', 'Miner idle');
     }
 
     const ww = state.whaleWatch || {};
     const mints = Object.keys(ww);
     $('whaleStats').innerHTML = mints.length
       ? mints
+          .slice(0, 8)
           .map((m) => {
             const w = ww[m];
-            const top = (w.holders || [])
-              .slice(0, 3)
-              .map((h) => `#${h.rank} ${h.pct != null ? h.pct.toFixed(1) + '%' : ''}`)
-              .join(' · ');
-            return `<div class="whale-row"><span>${w.symbol || shortAddr(m)}</span><strong>${top || '…'} · ${w.latencyMs || '—'}ms</strong></div>`;
+            return row(w.symbol || shortAddr(m), `${w.latencyMs || '—'}ms`);
           })
           .join('')
-      : '<div class="whale-row"><span>No open positions watched</span></div>';
+      : row('—', 'No open positions watched');
   }
-
 
   function fmtAgo(ts) {
     if (!ts) return 'never';

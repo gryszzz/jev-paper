@@ -459,7 +459,9 @@ function emptyState(settings = {}) {
       },
     },
     heatMap: {},
-    solReserve: 0, // profit sweep bucket (paper SOL)
+    solReserve: 0, // profit sweep bucket (paper SOL) — counted inside equity()
+    lastSweepEquity: starting, // ratchet: next sweep needs +trigger from this mark
+    tradeJournal: [], // closed fills for Stats (correct math, no fake aggregates)
     notifications: [],
   };
 }
@@ -549,7 +551,9 @@ function migrateState(raw) {
     raw.mode = 'paper';
     raw.liveEnabled = false;
     raw.heatMap = raw.heatMap || {};
-    raw.solReserve = raw.solReserve || 0;
+    raw.solReserve = Number(raw.solReserve) || 0;
+    raw.lastSweepEquity = Number(raw.lastSweepEquity) || Number(raw.startingBalance) || DEFAULTS.startingBalance;
+    raw.tradeJournal = Array.isArray(raw.tradeJournal) ? raw.tradeJournal : [];
     ensureWeights(raw);
     ensureRegistry(raw);
     raw.settings = {
@@ -573,9 +577,95 @@ function migrateState(raw) {
   return s;
 }
 
+function positionMarks(state) {
+  return (state.positions || []).reduce((sum, p) => sum + (Number(p.markValue) || Number(p.amountUsd) || 0), 0);
+}
+
+function positionCost(state) {
+  return (state.positions || []).reduce((sum, p) => sum + (Number(p.remainingUsdBasis) || Number(p.amountUsd) || 0), 0);
+}
+
+/** Deployable capital only (cash + open marks). Reserve is locked. */
+function workingEquity(state) {
+  return round((Number(state.cash) || 0) + positionMarks(state), 4);
+}
+
+/**
+ * Total paper wealth: cash + open marks + locked SOL reserve.
+ * Reserve is counted once here — never add it again in callers.
+ */
 function equity(state) {
-  const pos = state.positions.reduce((sum, p) => sum + (Number(p.markValue) || Number(p.amountUsd) || 0), 0);
-  return round(state.cash + pos, 4);
+  return round(workingEquity(state) + (Number(state.solReserve) || 0), 4);
+}
+
+/**
+ * Fix runaway profit-sweep / phantom reserve from the old fixed-threshold bug.
+ * Also realign realizedPnl + peak so books match cash+marks+reserve.
+ */
+function reconcileWealth(state) {
+  if (!state) return { ok: true, corrected: false };
+  const start = Number(state.startingBalance) || 100;
+  const working = workingEquity(state);
+  const reserve = Number(state.solReserve) || 0;
+  const total = round(working + reserve, 4);
+  const cost = positionCost(state);
+  const unrealized = round(positionMarks(state) - cost, 4);
+  const coherentRealized = round(working - start - unrealized, 4);
+  let corrected = false;
+
+  // Phantom: many sweeps while reserve dwarfs working capital (old bug)
+  const sweeps = (state.stats && state.stats.sweeps) || 0;
+  if (reserve > 0 && (reserve > Math.max(working, start) || (sweeps >= 5 && reserve > start))) {
+    state.solReserve = 0;
+    if (state.stats) {
+      state.stats.sweeps = 0;
+      state.stats.sweptUsd = 0;
+    }
+    corrected = true;
+  }
+
+  // Ratchet mark: never below start; at least current total so we don't re-sweep immediately
+  const eq = equity(state);
+  if (!Number.isFinite(state.lastSweepEquity) || state.lastSweepEquity <= 0) {
+    state.lastSweepEquity = start;
+    corrected = true;
+  }
+  if (corrected || state.lastSweepEquity < start) {
+    state.lastSweepEquity = Math.max(start, eq);
+  }
+
+  // Realized / peak vs books
+  if (state.stats) {
+    const reported = Number(state.stats.realizedPnl) || 0;
+    if (Math.abs(reported - coherentRealized) > Math.max(25, start * 0.25)) {
+      state.stats.realizedPnl = coherentRealized;
+      corrected = true;
+    }
+  }
+  if ((Number(state.dayRealizedPnl) || 0) > Math.max(0, coherentRealized) + 1) {
+    state.dayRealizedPnl = Math.max(0, coherentRealized);
+    corrected = true;
+  }
+  if ((Number(state.peakBalance) || 0) > eq * 1.02 + 1) {
+    state.peakBalance = Math.max(start, eq);
+    corrected = true;
+  }
+
+  const expected = round(start + (Number(state.stats && state.stats.realizedPnl) || 0) + unrealized + (Number(state.solReserve) || 0), 4);
+  // After reserve wipe, expected ≈ start + realized + unrealized; actual = working (+0 reserve)
+  const actual = equity(state);
+  const drift = round(actual - (start + (Number(state.stats && state.stats.realizedPnl) || 0) + unrealized), 4);
+  state._wealthInvariant = {
+    ok: Math.abs(drift) <= Math.max(1, start * 0.05),
+    drift,
+    working,
+    reserve: Number(state.solReserve) || 0,
+    realized: Number(state.stats && state.stats.realizedPnl) || 0,
+    unrealized,
+    corrected,
+    ts: Date.now(),
+  };
+  return state._wealthInvariant;
 }
 
 function pushEquity(state) {
@@ -591,6 +681,105 @@ function pushEquity(state) {
     state._newPeak = true;
   }
   return eq;
+}
+
+/** Derive Stats KPIs from tradeJournal (source of truth). */
+function buildTradeStats(state) {
+  const journal = Array.isArray(state.tradeJournal) ? state.tradeJournal : [];
+  const closed = journal.filter((t) => t && t.fullClose !== false);
+  const wins = closed.filter((t) => (t.pnl || 0) > 0);
+  const losses = closed.filter((t) => (t.pnl || 0) <= 0);
+  const realizedPnl = round(closed.reduce((s, t) => s + (Number(t.pnl) || 0), 0), 4);
+  const winSum = wins.reduce((s, t) => s + (Number(t.pnl) || 0), 0);
+  const lossSum = losses.reduce((s, t) => s + Math.abs(Number(t.pnl) || 0), 0);
+  const n = closed.length;
+  const avgWin = wins.length ? winSum / wins.length : 0;
+  const avgLoss = losses.length ? lossSum / losses.length : 0;
+  const expectancy = n ? realizedPnl / n : 0;
+  const profitFactor = lossSum > 0 ? winSum / lossSum : (winSum > 0 ? Infinity : 0);
+  const holdAvg = n
+    ? closed.reduce((s, t) => s + (Number(t.holdMs) || 0), 0) / n
+    : 0;
+  const rugStops = closed.filter((t) => t.reason === 'liq_shock' || t.reason === 'rug' || /rug/i.test(t.reason || '')).length;
+  const hardStops = closed.filter((t) => t.reason === 'stop' || t.reason === 'liq_shock').length;
+
+  // Max drawdown from equity history
+  let maxDd = 0;
+  let peak = Number(state.startingBalance) || 100;
+  for (const pt of state.equityHistory || []) {
+    const e = Number(pt.equity) || 0;
+    if (e > peak) peak = e;
+    if (peak > 0) maxDd = Math.max(maxDd, (peak - e) / peak);
+  }
+
+  const bySignal = {};
+  for (const t of closed) {
+    for (const sig of t.signals || []) {
+      const k = String(sig);
+      bySignal[k] = bySignal[k] || { trades: 0, pnl: 0, wins: 0, losses: 0 };
+      bySignal[k].trades += 1;
+      bySignal[k].pnl = round(bySignal[k].pnl + (Number(t.pnl) || 0), 4);
+      if ((t.pnl || 0) > 0) bySignal[k].wins += 1;
+      else bySignal[k].losses += 1;
+    }
+  }
+
+  const sorted = closed.slice().sort((a, b) => (Number(b.pnl) || 0) - (Number(a.pnl) || 0));
+  const best5 = sorted.slice(0, 5);
+  const worst5 = sorted.slice().reverse().slice(0, 5);
+
+  return {
+    trades: n,
+    wins: wins.length,
+    losses: losses.length,
+    winRate: n ? wins.length / n : 0,
+    realizedPnl,
+    expectancy: round(expectancy, 4),
+    avgWin: round(avgWin, 4),
+    avgLoss: round(avgLoss, 4),
+    profitFactor: profitFactor === Infinity ? 999 : round(profitFactor, 3),
+    maxDrawdownPct: round(maxDd * 100, 2),
+    avgHoldMs: Math.round(holdAvg),
+    rugStops,
+    hardStops,
+    bySignal,
+    best5: best5.map(compactTrade),
+    worst5: worst5.map(compactTrade),
+  };
+}
+
+function compactTrade(t) {
+  return {
+    symbol: t.symbol,
+    mint: t.mint,
+    pnl: round(Number(t.pnl) || 0, 4),
+    pnlPct: round(Number(t.pnlPct) || 0, 2),
+    lane: t.lane,
+    mode: t.tradeMode,
+    reason: t.reason,
+    holdMs: t.holdMs || 0,
+    ts: t.ts,
+  };
+}
+
+function tradeSignalsFromPos(pos) {
+  const out = [];
+  if (pos.catalyst >= 10 || pos.catalystNote) out.push('catalyst');
+  if (pos.smartMoney && (pos.smartMoney.hits > 0 || pos.smartMoney.score > 0)) out.push('smart_wallet');
+  if (pos.viral || pos.viralScore >= 8) out.push('viral');
+  if (pos.copyHit || (pos.smartMoney && pos.smartMoney.copy)) out.push('copy');
+  if (pos.xBuzz || (pos.features && pos.features.xBuzz)) out.push('x_buzz');
+  if (pos.earlyTraction) out.push('traction');
+  const bd = pos.scoreBreakdown || [];
+  for (const row of bd) {
+    if (!row || !row.k) continue;
+    if (['smartMoney', 'catalyst', 'viral', 'x-buzz', 'xbuzz', 'narrative'].includes(row.k) && (Number(row.v) || 0) >= 4) {
+      if (!out.includes(row.k === 'x-buzz' || row.k === 'xbuzz' ? 'x_buzz' : row.k)) {
+        out.push(row.k === 'x-buzz' || row.k === 'xbuzz' ? 'x_buzz' : row.k);
+      }
+    }
+  }
+  return out.length ? out : ['untagged'];
 }
 
 function addActivity(state, item) {
@@ -652,6 +841,34 @@ class PaperEngine {
     tradedLedger.hydrateStateGates(this.state);
     if (process.env.LIVE_ENABLED === 'true') {
       console.warn('[jev] LIVE_ENABLED=true ignored — paper only until LiveAdapter is completed');
+    }
+    // Correct phantom solReserve from the old fixed-threshold sweep bug
+    const inv = reconcileWealth(this.state);
+    if (inv && inv.corrected) {
+      console.warn('[jev] wealth reconciled', JSON.stringify(inv));
+    }
+    // Seed journal from recent closed activity if empty (no fake PnL — only logged sells)
+    if (!this.state.tradeJournal.length) {
+      for (const a of (this.state.activity || []).slice().reverse()) {
+        if (!a || !['sell', 'tp', 'stopped', 'whale_exit', 'time'].includes(a.type)) continue;
+        if (a.pnl == null) continue;
+        this.state.tradeJournal.push({
+          ts: a.ts || Date.now(),
+          symbol: a.symbol,
+          mint: a.mint,
+          pnl: Number(a.pnl) || 0,
+          pnlPct: Number(a.pnlPct) || 0,
+          lane: a.lane || null,
+          tradeMode: a.tradeMode || null,
+          abArm: a.abArm || null,
+          reason: a.type === 'stopped' ? 'stop' : a.type,
+          holdMs: 0,
+          signals: ['untagged'],
+          fullClose: true,
+          seeded: true,
+        });
+      }
+      if (this.state.tradeJournal.length > 80) this.state.tradeJournal = this.state.tradeJournal.slice(-80);
     }
     saveState(this.state, { immediate: true });
     try { await tradedLedger.flush(true); } catch (_) {}
@@ -728,6 +945,10 @@ class PaperEngine {
       presets: Object.keys(PRESETS).map((id) => ({ id, label: PRESETS[id].label })),
       adapterMode: this.adapter.mode(),
       solReserve: round(s.solReserve || 0, 4),
+      workingEquity: round(workingEquity(s), 4),
+      lastSweepEquity: round(Number(s.lastSweepEquity) || s.startingBalance || 0, 4),
+      wealthInvariant: s._wealthInvariant || null,
+      tradeStats: buildTradeStats(s),
       heatMap: s.heatMap || {},
       signalWeights: topWeights(s.signalWeights, 6),
       smartMoneyTop: (ensureRegistry(s).wallets || []).slice().sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,8),
@@ -1039,33 +1260,40 @@ class PaperEngine {
 
   maybeProfitSweep() {
     const state = this.state;
+    if (!state || state._sweptThisTick) return false;
     const settings = state.settings;
-    const eq = equity(state);
     const trigger = settings.profitSweepTrigger || 1.35;
     const start = state.startingBalance || 100;
-    if (eq < start * trigger) return;
-    if (state.cash < 10) return;
+    const eq = equity(state); // includes reserve once
+    const basemark = Math.max(Number(state.lastSweepEquity) || start, start);
+    // NEW high only: must clear basemark * trigger (step ladder), not a fixed start*1.35
+    if (eq + 1e-9 < basemark * trigger) return false;
+    if (state.cash < 10) return false;
     const pct = settings.profitSweepPct || 0.3;
-    // Sweep a slice of free cash into paper SOL reserve (locks gains)
     const sweep = round(state.cash * pct, 4);
-    if (sweep < 2) return;
+    if (sweep < 2) return false;
+
+    // Move cash → reserve (equity unchanged; reserve counted inside equity())
     state.cash = round(state.cash - sweep, 4);
     state.solReserve = round((state.solReserve || 0) + sweep, 4);
+    state.lastSweepEquity = equity(state); // ratchet to post-sweep total
+    state._sweptThisTick = true;
     state.stats.sweeps = (state.stats.sweeps || 0) + 1;
     state.stats.sweptUsd = round((state.stats.sweptUsd || 0) + sweep, 4);
     state.agents.risk.sweptUsd = state.stats.sweptUsd;
     state.agents.risk.flash = 'profit';
-    state.agents.risk.lastAction = { symbol: 'SOL', reason: 'sweep', pnl: sweep, pnlPct: 0 };
+    state.agents.risk.lastAction = { symbol: 'SOL', reason: 'profit_locked', pnl: sweep, pnlPct: 0 };
     addActivity(state, {
       type: 'sweep',
       symbol: 'SOL',
       agent: 'Risk',
-      detail: `Profit sweep ${round(pct * 100, 0)}% → reserve`,
+      detail: `Profit locked ${round(pct * 100, 0)}% → reserve`,
       amountUsd: sweep,
       pnl: sweep,
       pnlPct: 0,
     });
-    setBanner(state, `Swept $${sweep.toFixed(2)} to SOL reserve · Mode: PAPER`, null);
+    setBanner(state, `Profit locked $${sweep.toFixed(2)} → SOL reserve · Mode: PAPER`, null);
+    return true;
   }
 
   setRunning(running) {
@@ -1233,6 +1461,7 @@ class PaperEngine {
     const state = this.state;
     const settings = state.settings;
     try {
+      state._sweptThisTick = false;
       rolloverDay(state);
       state.agents.scanner.status = 'scanning';
       state.agents.scanner.lastRun = now();
@@ -2003,7 +2232,7 @@ class PaperEngine {
         return null;
       }
       // Price-impact veto: estimated sell of full size would exceed 12%
-      const notional = Math.min(equity(state) * (settings.buyPctMax || 0.14), state.cash * 0.95);
+      const notional = Math.min(workingEquity(state) * (settings.buyPctMax || 0.14), state.cash * 0.95);
       if (liqNow > 0 && notional / liqNow >= 0.12) {
         addActivity(state, {
           type: 'skip',
@@ -2712,6 +2941,27 @@ class PaperEngine {
           pnlPct,
         });
         state.agents.analyst.weights = topWeights(state.signalWeights, 4);
+        const holdMs = Math.max(0, now() - (Number(pos.openedAt) || now()));
+        state.tradeJournal = state.tradeJournal || [];
+        state.tradeJournal.push({
+          ts: now(),
+          symbol: pos.symbol,
+          mint: pos.mint,
+          pnl,
+          pnlPct,
+          lane: pos.lane || null,
+          tradeMode: pos.tradeMode || null,
+          abArm: pos.abArm || null,
+          reason,
+          holdMs,
+          signals: tradeSignalsFromPos(pos),
+          fullClose: true,
+          amountUsd: basis,
+        });
+        if (state.tradeJournal.length > 200) state.tradeJournal = state.tradeJournal.slice(-200);
+        if (reason === 'liq_shock' || reason === 'rug') {
+          state.stats.rugStops = (state.stats.rugStops || 0) + 1;
+        }
       }
     }
     if (reason === 'whale') {
