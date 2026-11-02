@@ -285,6 +285,7 @@ function stats() {
     lastQuery: store.lastQuery,
     apiCalls: store.apiCalls,
     signals: store.signals,
+    authFails: store.authFails || 0,
     tickers: Object.keys(store.byTicker).length,
     top,
   };

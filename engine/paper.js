@@ -182,6 +182,15 @@ function recordMintExit(state, pos, reason) {
   }
 }
 
+
+function ensureLiquidityFloor(settings = {}) {
+  const s = settings || {};
+  if (s.minEntryLiquidity == null || s.minEntryLiquidity < 15000) s.minEntryLiquidity = 15000;
+  if (s.liqPullExitPct == null || !(s.liqPullExitPct > 0)) s.liqPullExitPct = 0.5;
+  if ((s.minLiquidity || 0) < 15000) s.minLiquidity = 15000;
+  return s;
+}
+
 function defaultTimeStopMs(pos) {
   const lane = (pos && pos.lane) || 'MOVER';
   const mode = (pos && pos.tradeMode) || 'RIDE';
@@ -541,6 +550,7 @@ function migrateState(raw) {
       ...raw.settings,
       takeProfitLadder: (raw.settings && raw.settings.takeProfitLadder) || DEFAULTS.takeProfitLadder,
     };
+    ensureLiquidityFloor(raw.settings);
     return ensureLaneSettings(raw);
   }
   // v1 → v2
@@ -1070,7 +1080,7 @@ class PaperEngine {
       'slippage', 'minScore', 'running', 'kellyCap', 'maxDailyLossPct', 'cooldownMs',
       'whaleDropPct', 'whalePollMs', 'preferGraduating', 'preferEarlyLanes', 'maxMarketCapUsd',
       'lossStreakLimit', 'lossStreakCooldownMs', 'maxNarrativePct', 'profitSweepPct', 'profitSweepTrigger',
-      'abHarness', 'minRunnerScore', 'riskPerTradePct',
+      'abHarness', 'minRunnerScore', 'riskPerTradePct', 'minEntryLiquidity', 'liqPullExitPct', 'dustUsd', 'mintCooldownMs',
       'liveMaxPerTradeUsd', 'liveMaxDailySpendUsd', 'liveMaxDailyLossUsd', 'liveWalletBalanceCapUsd',
     ];
     for (const k of keys) {
@@ -1088,6 +1098,7 @@ class PaperEngine {
     if (patch.startingBalance != null && Number(patch.startingBalance) > 0) {
       this.state.startingBalance = Number(patch.startingBalance);
     }
+    ensureLiquidityFloor(s);
     // restart whale timer if interval changed
     if (patch.whalePollMs && this._whaleTimer) {
       clearInterval(this._whaleTimer);
@@ -2529,7 +2540,7 @@ class PaperEngine {
         } catch (e) {
           if (e && e.code === 'RPC_COOLDOWN') {
             // silent
-          } else if (!/429|cooldown|rate|rpc error|exhausted/i.test(String(e && e.message))) {
+          } else if (!/429|cooldown|rate|rpc error|exhausted|free plan|not available|upgrade to paid/i.test(String(e && e.message))) {
             console.warn('whale', pos.symbol, e.message);
           }
         }

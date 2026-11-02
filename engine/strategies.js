@@ -90,7 +90,7 @@ const PRESETS = {
   runner_scalp: {
     id: 'runner_scalp',
     label: 'Runner Scalp',
-    minLiquidity: 8000,
+    minLiquidity: 15000,
     minScore: 58,
     buyPctMin: 0.08,
     buyPctMax: 0.12,
@@ -120,7 +120,7 @@ const PRESETS = {
   runner_moon: {
     id: 'runner_moon',
     label: 'Runner Moon',
-    minLiquidity: 12000,
+    minLiquidity: 15000,
     minScore: 65,
     buyPctMin: 0.1,
     buyPctMax: 0.15,
@@ -150,7 +150,7 @@ const PRESETS = {
   spike_tp: {
     id: 'spike_tp',
     label: 'Spike TP',
-    minLiquidity: 10000,
+    minLiquidity: 15000,
     minScore: 62,
     buyPctMin: 0.1,
     buyPctMax: 0.14,
@@ -214,7 +214,7 @@ function applyPreset(settings, presetId) {
   return {
     ...settings,
     strategyId: p.id,
-    minLiquidity: p.minLiquidity,
+    minLiquidity: Math.max(15000, Number(p.minLiquidity) || 15000),
     minScore: p.minScore,
     buyPctMin: p.buyPctMin,
     buyPctMax: p.buyPctMax,
