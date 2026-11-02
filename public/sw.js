@@ -3,14 +3,14 @@ const CACHE = 'jev-paper-v15-20261102';
 const ASSETS = [
   '/',
   '/index.html',
-  '/styles.css?v=14a',
-  '/floor.js?v=14a',
-  '/app.js?v=14a',
-  '/manifest.json?v=14a',
-  '/icons/icon-192.png?v=14a',
-  '/icons/icon-512.png?v=14a',
-  '/img/j-logo.svg?v=14a',
-  '/img/j-mark.svg?v=14a',
+  '/styles.css?v=15',
+  '/floor.js?v=15',
+  '/app.js?v=15',
+  '/manifest.json?v=15',
+  '/icons/icon-192.png?v=15',
+  '/icons/icon-512.png?v=15',
+  '/img/j-logo.svg?v=15',
+  '/img/j-mark.svg?v=15',
 ];
 
 self.addEventListener('install', (e) => {
