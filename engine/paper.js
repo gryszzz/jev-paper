@@ -463,6 +463,22 @@ function migrateState(raw) {
       if (raw.settings.mintCooldownMs == null) raw.settings.mintCooldownMs = 45 * 60e3;
       if (raw.settings.mintStopBlacklistMs == null) raw.settings.mintStopBlacklistMs = 24 * 3600e3;
       if (raw.settings.dustUsd == null || raw.settings.dustUsd < 1) raw.settings.dustUsd = 1;
+      // One-shot prune of pre-v18 dust / micro-sell spam from the activity feed
+      if (Array.isArray(raw.activity) && !raw._dustActivityPruned) {
+        raw.activity = raw.activity.filter((it) => {
+          if (!it) return false;
+          const t = String(it.type || '').toLowerCase();
+          const amt = Number(it.amountUsd);
+          const pnl = Number(it.pnl);
+          const pct = Number(it.pnlPct);
+          if (t === 'buy') return true;
+          if (Number.isFinite(pct) && Math.abs(pct) > 500) return false;
+          if (Number.isFinite(amt) && amt < 0.05 && t !== 'buy') return false;
+          if (Number.isFinite(pnl) && Math.abs(pnl) < 0.05 && Number.isFinite(amt) && amt < 0.1 && t !== 'buy') return false;
+          return true;
+        });
+        raw._dustActivityPruned = true;
+      }
       if (raw.settings.preferNovelMints == null) raw.settings.preferNovelMints = true;
       if (raw.settings.maxMoverPositions == null) raw.settings.maxMoverPositions = 1;
       if (raw.settings.minEntryLiquidity == null) raw.settings.minEntryLiquidity = 15000;

@@ -1,3 +1,15 @@
+## 2026-11-02 — verify v17–v19 live + dust feed prune
+
+Checklist vs live `fa62bcb`→v19.2:
+1. mintCooldown 45m + stop blacklist 24h + novelty bonus/cap — LIVE (`mintCooldownActive`, `preferNovelMints`, lane MOVER cap/age).
+2. timeStop FRESH 18m / GRAD+MOVER 45m (+ mode overrides) — LIVE (open HEDGE timeStop 45m).
+3. daily-loss auto-resume — LIVE (`cooldownUntil=0`, re-armed, new buys after halt msgs).
+4. dustUsd $1 full close — LIVE post-v18 (0 new WASTED); v19.2 prunes historical micro-sell spam from feed.
+5. minEntryLiquidity $15k + impact veto + liqPull 0.5 — LIVE in settings.
+6. T1/T2/T3 minRunner 38/30/48 — LIVE (T1 fill on HEDGE R41).
+7. X_BEARER set but **HTTP 401** — not producing signals (needs valid Twitter API v2 app bearer).
+8–9. Compact one-line trades + plain J. header — LIVE.
+
 
 - v19.1: pad agent homes 12–88% + inward whale companion so 5-up fits ~390px without clipping.
 # JEV Trencher Research Playbook

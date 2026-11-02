@@ -483,7 +483,17 @@
 
     const allTrades = (state.activity || []).filter((it) => {
       const t = (it.type || '').toLowerCase();
-      return t === 'buy' || t === 'sell' || t === 'tp' || t === 'stopped' || t === 'stop' || it.pnl != null || it.amountUsd != null;
+      if (!(t === 'buy' || t === 'sell' || t === 'tp' || t === 'stopped' || t === 'stop' || it.pnl != null || it.amountUsd != null)) return false;
+      // Hide dust / micro-zombie spam (WASTED $0 / absurd % from partial cuts)
+      const amt = Number(it.amountUsd);
+      const pnl = Number(it.pnl);
+      const pct = Number(it.pnlPct);
+      const dustRow =
+        (Number.isFinite(amt) && amt < 0.05 && t !== 'buy') ||
+        (Number.isFinite(pnl) && Math.abs(pnl) < 0.05 && Number.isFinite(amt) && amt < 0.1 && t !== 'buy') ||
+        (Number.isFinite(pct) && Math.abs(pct) > 500);
+      if (dustRow) return false;
+      return true;
     });
     const trades = allTrades.slice(0, deskTradeLimit);
     const stack = $('tradeStack');
