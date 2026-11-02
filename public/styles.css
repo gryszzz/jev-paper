@@ -270,7 +270,7 @@ body { min-height: 100dvh; }
 }
 
 /* —— upgrade: mode badge, grid, lock, stats, whales —— */
-.banner-mark { width: 18px; height: 18px; flex-shrink: 0; }
+.banner-mark { width: 22px; height: 22px; flex-shrink: 0; border-radius: 5px; }
 .mode-badge {
   margin-left: auto; flex-shrink: 0;
   background: var(--green-dim); color: var(--green);
