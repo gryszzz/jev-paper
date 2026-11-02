@@ -1258,7 +1258,22 @@ class PaperEngine {
       // Boost smart-money entry mints
       for (const m of Object.keys(state._smartEntryMints || {})) mintSet.add(m);
 
-      const mints = [...mintSet].slice(0, 48);
+      // Priority: newest pumpportal / pump.fun / gecko pools first so FRESH isn't starved by stale DS movers
+      const priority = [];
+      const seenP = new Set();
+      const pushP = (m) => {
+        if (!m || seenP.has(m)) return;
+        seenP.add(m);
+        priority.push(m);
+      };
+      for (const r of rt) pushP(r && r.mint);
+      for (const p of pumpNew) pushP(p && p.mint);
+      for (const p of pumpGrad) pushP(p && p.mint);
+      for (const g of gecko) pushP(g && g.mint);
+      for (const row of dsTrend || []) pushP(row.mint || row.tokenAddress);
+      for (const row of geckoTrend || []) pushP(row && row.mint);
+      for (const m of mintSet) pushP(m);
+      const mints = priority.slice(0, 64);
       const pairs = await this.fetchPairsForMints(mints);
       for (const p of pairs) {
         if (!p.icon && icons.has(p.mint)) p.icon = icons.get(p.mint);
@@ -1350,7 +1365,7 @@ class PaperEngine {
           if (!g.ok) return false;
           // lane-specific liquidity floor (gates handle FRESH/GRAD/MOVER)
           if (p.lane === LANE.MOVER && p.liquidity < Math.max(15000, settings.minLiquidity || 15000)) return false;
-          if (p.lane === LANE.FRESH && p.liquidity > 0 && p.liquidity < ((settings.lanes && settings.lanes.freshMinLiq) || 5000)) return false;
+          if (p.lane === LANE.FRESH && (p.liquidity || 0) < ((settings.lanes && settings.lanes.freshMinLiq) || 5000)) return false;
           if (p.lane === LANE.GRAD && p.liquidity > 0 && p.liquidity < Math.max(15000, (settings.lanes && settings.lanes.gradMinLiq) || 15000)) return false;
           return true;
         })
@@ -1550,7 +1565,10 @@ class PaperEngine {
           }
         }
         const lane = p.lane || LANE.MOVER;
-        if (lane === LANE.MOVER && moverOpen >= maxMover) {
+        // Cap MOVERs, but never starve open slots when FRESH/GRAD candidates are absent
+        const freshOrGradAvail = scored.some((x) => x.pass && (x.lane === LANE.FRESH || x.lane === LANE.GRAD) && !openMints.has(x.mint) && !tradedLedger.recentlyTraded(x.mint) && !state.seenMints.includes(x.mint));
+        const moverCap = freshOrGradAvail ? maxMover : Math.max(maxMover, Math.min(settings.maxPositions || 3, 2));
+        if (lane === LANE.MOVER && moverOpen >= moverCap) {
           p.laneCapHit = true;
           return false;
         }
