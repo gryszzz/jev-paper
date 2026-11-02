@@ -55,11 +55,21 @@ app.use(authRequired);
 
 app.use(
   express.static(path.join(__dirname, 'public'), {
-    maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
+    maxAge: 0,
+    etag: true,
     setHeaders(res, filePath) {
       if (filePath.endsWith('sw.js')) {
-        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
         res.setHeader('Service-Worker-Allowed', '/');
+        return;
+      }
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        return;
+      }
+      if (filePath.endsWith('.js') || filePath.endsWith('.css') || filePath.endsWith('manifest.json')) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
       }
       if (filePath.endsWith('manifest.json')) {
         res.setHeader('Content-Type', 'application/manifest+json');
@@ -146,6 +156,7 @@ app.post('/api/reset', (req, res) => {
 });
 
 app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

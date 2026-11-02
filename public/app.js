@@ -530,7 +530,23 @@
   async function boot() {
     bind();
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        location.reload();
+      });
+      navigator.serviceWorker
+        .register('/sw.js?v=3')
+        .then((reg) => {
+          const ping = () => reg.update().catch(() => {});
+          ping();
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') ping();
+          });
+          setInterval(ping, 60e3);
+        })
+        .catch(() => {});
     }
     const ok = await checkAuth();
     if (ok) await refresh();
