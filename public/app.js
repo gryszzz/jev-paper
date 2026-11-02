@@ -71,6 +71,7 @@
   async function checkAuth() {
     try {
       const s = await fetch('/api/auth/status', { credentials: 'include', headers: headers() }).then((r) => r.json());
+      // Server only sets required=true when LIVE_ENABLED; PAPER never locks.
       if (!s.required || s.ok) {
         showLock(false);
         return true;
@@ -537,7 +538,7 @@
         location.reload();
       });
       navigator.serviceWorker
-        .register('/sw.js?v=3')
+        .register('/sw.js?v=4')
         .then((reg) => {
           const ping = () => reg.update().catch(() => {});
           ping();

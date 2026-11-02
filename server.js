@@ -35,8 +35,13 @@ function parseCookies(req) {
   return out;
 }
 
+/** Passcode gate is PAPER-open; only enforced when LIVE_ENABLED=true and APP_PASSCODE is set. */
+function passcodeEnforced() {
+  return LIVE_ENABLED && !!APP_PASSCODE;
+}
+
 function authRequired(req, res, next) {
-  if (!APP_PASSCODE) return next(); // open if no passcode configured
+  if (!passcodeEnforced()) return next();
   if (req.path === '/api/health' || req.path === '/api/auth/status' || req.path === '/api/auth/login') {
     return next();
   }
@@ -46,7 +51,7 @@ function authRequired(req, res, next) {
   const exp = token && sessions.get(token);
   if (exp && exp > Date.now()) return next();
   if (token) sessions.delete(token);
-  return res.status(401).json({ error: 'auth_required', paper: true, mode: 'PAPER' });
+  return res.status(401).json({ error: 'auth_required', paper: false, mode: 'LIVE' });
 }
 
 app.use(cors({ origin: true, credentials: true }));
@@ -85,21 +90,23 @@ app.get('/api/health', (_req, res) => {
     mode: 'PAPER',
     liveEnabled: false,
     envLiveFlag: LIVE_ENABLED,
-    auth: !!APP_PASSCODE,
+    auth: passcodeEnforced(),
+    authConfigured: !!APP_PASSCODE,
     ts: Date.now(),
   });
 });
 
 app.get('/api/auth/status', (req, res) => {
-  if (!APP_PASSCODE) return res.json({ required: false, ok: true });
+  // PAPER mode: never require passcode. LIVE_ENABLED + APP_PASSCODE re-enables the gate.
+  if (!passcodeEnforced()) return res.json({ required: false, ok: true, paper: true });
   const cookies = parseCookies(req);
   const token = cookies.jev_session || req.headers['x-jev-session'];
   const exp = token && sessions.get(token);
-  res.json({ required: true, ok: !!(exp && exp > Date.now()) });
+  res.json({ required: true, ok: !!(exp && exp > Date.now()), paper: false });
 });
 
 app.post('/api/auth/login', (req, res) => {
-  if (!APP_PASSCODE) return res.json({ ok: true, required: false });
+  if (!passcodeEnforced()) return res.json({ ok: true, required: false, paper: true });
   const pass = (req.body && req.body.passcode) || '';
   if (!timingSafeEqualStr(pass, APP_PASSCODE)) {
     return res.status(401).json({ ok: false, error: 'bad_passcode' });
