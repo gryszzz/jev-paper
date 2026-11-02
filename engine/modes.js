@@ -32,7 +32,7 @@ const AB_ARMS = {
         { mult: 2.0, sellPct: 0.25 },
       ],
       trailRemainder: true,
-      timeStopMs: null,
+      timeStopMs: 45 * 60e3,
       spikeExit: false,
       liquidityShockPct: 0.15,
       allowReentry: false,
@@ -83,7 +83,7 @@ const AB_ARMS = {
       spikeSellPct: 0.45,
       liquidityShockPct: 0.08,
       allowReentry: true,
-      maxReentriesPerHour: 2,
+      maxReentriesPerHour: 1,
       reentryPullbackMin: 0.08,
       reentryPullbackMax: 0.18,
       reentryStopPct: -0.08,
@@ -235,7 +235,8 @@ function modeRiskProfile(mode, runnerScoreVal, armRisk) {
       initialsAt2x: true,
       widenStopAfterInitials: true,
       moonbagMinFrac: 0.15,
-      timeStopMs: base.timeStopMs != null ? base.timeStopMs : 24 * 3600e3,
+      timeStopMs: base.timeStopMs != null ? base.timeStopMs : 6 * 3600e3,
+      flatBuyersMs: base.flatBuyersMs != null ? base.flatBuyersMs : 45 * 60e3,
       liquidityShockPct: base.liquidityShockPct != null ? base.liquidityShockPct : 0.1,
     };
   }
@@ -250,7 +251,7 @@ function modeRiskProfile(mode, runnerScoreVal, armRisk) {
       { mult: 1.75, sellPct: 0.3 },
       { mult: 2.5, sellPct: 0.3 },
     ],
-    timeStopMs: base.timeStopMs != null ? base.timeStopMs : 30 * 60e3,
+    timeStopMs: base.timeStopMs != null ? base.timeStopMs : 45 * 60e3,
     liquidityShockPct: base.liquidityShockPct != null ? base.liquidityShockPct : 0.09,
   };
 }

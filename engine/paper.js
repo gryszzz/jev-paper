@@ -104,6 +104,11 @@ const DEFAULTS = {
   abHarness: true,
   minRunnerScore: 40,
   riskPerTradePct: 0.002, // 0.20% equity risk budget
+  mintCooldownMs: 45 * 60e3, // no re-entry after normal exit
+  mintStopBlacklistMs: 24 * 3600e3, // after hard stop / liq shock
+  dustUsd: 0.5, // force-close leftover dust to free slots
+  preferNovelMints: true,
+  maxMoverPositions: 1,
 };
 
 function now() {
@@ -122,6 +127,71 @@ function round(n, d = 2) {
 function short(a) {
   return a ? `${String(a).slice(0, 4)}…${String(a).slice(-4)}` : '—';
 }
+
+/** Per-mint re-entry gate: blacklist after stop, cooldown after any exit. */
+function mintBlocked(state, mint, { allowScalpReclaim = false } = {}) {
+  if (!mint) return { blocked: true, why: 'no-mint' };
+  const bl = state.mintBlacklist && state.mintBlacklist[mint];
+  if (bl) return { blocked: true, why: 'stop-blacklist', stopLoss: true };
+  const cd = state.mintCooldown && state.mintCooldown[mint];
+  if (!cd) return { blocked: false };
+  if (cd.stopLoss) return { blocked: true, why: 'stop-cooldown', stopLoss: true };
+  if (allowScalpReclaim && cd.allowReclaim && (cd.reentries || 0) < 1) {
+    return { blocked: false, reclaimOk: true };
+  }
+  if (now() < (cd.until || 0)) return { blocked: true, why: 'mint-cooldown', until: cd.until };
+  return { blocked: false };
+}
+
+function recordMintExit(state, pos, reason) {
+  if (!pos || !pos.mint) return;
+  state.mintCooldown = state.mintCooldown || {};
+  state.mintBlacklist = state.mintBlacklist || {};
+  const settings = state.settings || {};
+  const stopLike = reason === 'stop' || reason === 'liq_shock';
+  const coolMs = stopLike
+    ? settings.mintStopBlacklistMs || 24 * 3600e3
+    : settings.mintCooldownMs || 45 * 60e3;
+  const allowReclaim = reason === 'spike' && !!pos.allowReentry && (pos.reentries || 0) < 1;
+  state.mintCooldown[pos.mint] = {
+    until: now() + coolMs,
+    reason,
+    stopLoss: stopLike,
+    symbol: pos.symbol,
+    allowReclaim,
+    reentries: pos.reentries || 0,
+  };
+  if (stopLike) {
+    state.mintBlacklist[pos.mint] = { ts: now(), reason, symbol: pos.symbol };
+  }
+  // prune
+  const cds = Object.keys(state.mintCooldown);
+  if (cds.length > 400) {
+    const sorted = cds
+      .map((m) => [m, state.mintCooldown[m].until || 0])
+      .sort((a, b) => a[1] - b[1]);
+    for (const [m] of sorted.slice(0, cds.length - 400)) delete state.mintCooldown[m];
+  }
+}
+
+function defaultTimeStopMs(pos) {
+  const lane = (pos && pos.lane) || 'MOVER';
+  const mode = (pos && pos.tradeMode) || 'RIDE';
+  if (lane === 'FRESH' || mode === 'SCALP') return 15 * 60e3;
+  if (mode === 'MOON') return 6 * 3600e3;
+  return 45 * 60e3;
+}
+
+function isDustPosition(pos, settings = {}) {
+  const dust = settings.dustUsd != null ? settings.dustUsd : 0.5;
+  const basis = Number(pos.remainingUsdBasis);
+  const mark = Number(pos.markValue);
+  if (basis >= 0 && basis < dust) return true;
+  if (mark >= 0 && mark < dust * 0.5 && basis < dust * 2) return true;
+  if ((Number(pos.tokens) || 0) > 0 && mark === 0 && basis < dust * 2) return true;
+  return false;
+}
+
 
 const MAJORS = new Set(
   [
@@ -281,6 +351,11 @@ function emptyState(settings = {}) {
       abHarness: merged.abHarness != null ? merged.abHarness : DEFAULTS.abHarness,
       minRunnerScore: merged.minRunnerScore != null ? merged.minRunnerScore : DEFAULTS.minRunnerScore,
       riskPerTradePct: merged.riskPerTradePct != null ? merged.riskPerTradePct : DEFAULTS.riskPerTradePct,
+      mintCooldownMs: merged.mintCooldownMs != null ? merged.mintCooldownMs : DEFAULTS.mintCooldownMs,
+      mintStopBlacklistMs: merged.mintStopBlacklistMs != null ? merged.mintStopBlacklistMs : DEFAULTS.mintStopBlacklistMs,
+      dustUsd: merged.dustUsd != null ? merged.dustUsd : DEFAULTS.dustUsd,
+      preferNovelMints: merged.preferNovelMints != null ? merged.preferNovelMints : DEFAULTS.preferNovelMints,
+      maxMoverPositions: merged.maxMoverPositions != null ? merged.maxMoverPositions : DEFAULTS.maxMoverPositions,
       liveMaxPerTradeUsd: DEFAULTS.liveMaxPerTradeUsd,
       liveMaxDailySpendUsd: DEFAULTS.liveMaxDailySpendUsd,
       liveMaxDailyLossUsd: DEFAULTS.liveMaxDailyLossUsd,
@@ -293,6 +368,8 @@ function emptyState(settings = {}) {
     scanned: [],
     scored: [],
     seenMints: [],
+    mintCooldown: {}, // mint -> { until, reason, stopLoss, symbol }
+    mintBlacklist: {}, // mint -> { ts, reason } permanent-ish after stop
     rejected: [],
     whaleWatch: {}, // mint -> { holders, supply, updatedAt, events }
     stats: emptyStats(),
@@ -374,11 +451,34 @@ function migrateState(raw) {
     raw.stats.byArm = raw.stats.byArm || emptyArmStats();
     raw.stats.byMode = raw.stats.byMode || emptyStats().byMode;
     raw.scalpWatch = raw.scalpWatch || [];
+    raw.mintCooldown = raw.mintCooldown || {};
+    raw.mintBlacklist = raw.mintBlacklist || {};
     if (raw.settings) {
       if (raw.settings.abHarness == null) raw.settings.abHarness = true;
       if (raw.settings.minRunnerScore == null) raw.settings.minRunnerScore = 40;
+      if (raw.settings.mintCooldownMs == null) raw.settings.mintCooldownMs = 45 * 60e3;
+      if (raw.settings.mintStopBlacklistMs == null) raw.settings.mintStopBlacklistMs = 24 * 3600e3;
+      if (raw.settings.dustUsd == null) raw.settings.dustUsd = 0.5;
+      if (raw.settings.preferNovelMints == null) raw.settings.preferNovelMints = true;
+      if (raw.settings.maxMoverPositions == null) raw.settings.maxMoverPositions = 1;
+      // Resume paper after deploy if daily-loss flipped running off — exits + new entries
+      // still honor cooldownUntil / killSwitch.
+      if (raw.settings.running === false && !raw.killSwitch) {
+        raw.settings.running = true;
+      }
     }
     raw.ruggedDevs = raw.ruggedDevs || [];
+    // Backfill time stops on legacy positions stuck without them
+    for (const pos of raw.positions || []) {
+      if (pos && !pos.timeStopAt && pos.openedAt) {
+        const lane = pos.lane || 'MOVER';
+        const mode = pos.tradeMode || 'RIDE';
+        let ms = 45 * 60e3;
+        if (lane === 'FRESH' || mode === 'SCALP') ms = 15 * 60e3;
+        else if (mode === 'MOON') ms = 6 * 3600e3;
+        pos.timeStopAt = pos.openedAt + ms;
+      }
+    }
     raw.killSwitch = !!raw.killSwitch;
     raw.mode = 'paper';
     raw.liveEnabled = false;
@@ -541,6 +641,8 @@ class PaperEngine {
       dayPnl: round(dayPnl, 4),
       dayRealizedPnl: round(s.dayRealizedPnl || 0, 4),
       cooldownUntil: s.cooldownUntil || 0,
+      mintCooldownActive: Object.values(s.mintCooldown || {}).filter((c) => c && now() < (c.until || 0)).length,
+      mintBlacklistCount: Object.keys(s.mintBlacklist || {}).length,
       presets: Object.keys(PRESETS).map((id) => ({ id, label: PRESETS[id].label })),
       adapterMode: this.adapter.mode(),
       solReserve: round(s.solReserve || 0, 4),
@@ -624,11 +726,18 @@ class PaperEngine {
       ...((state.positions || []).map((p) => p.mint)),
     ].filter(Boolean);
     await runMiner(state, { launches, mints: [...new Set(mints)].slice(0, 8) });
-    const symbols = [...new Set([
-      ...((state.scanned || []).map((p) => p.symbol)),
-      ...((state.positions || []).map((p) => p.symbol)),
-    ].filter(Boolean))].slice(0, 12);
-    try { await xbuzz.tickBuzz(symbols); } catch (_) {}
+    // X buzz: only top scored/open candidates (cashtag + short CA), 1 req/tick inside xbuzz
+    const buzzTargets = [];
+    const seenSym = new Set();
+    for (const p of [...(state.scored || []), ...(state.positions || []), ...(state.scanned || [])]) {
+      if (!p || !p.symbol) continue;
+      const k = String(p.symbol).toUpperCase();
+      if (seenSym.has(k)) continue;
+      seenSym.add(k);
+      buzzTargets.push({ symbol: p.symbol, mint: p.mint || null });
+      if (buzzTargets.length >= 6) break;
+    }
+    try { await xbuzz.tickBuzz(buzzTargets); } catch (_) {}
     // refresh free RPC wallet watch with latest top wallets
     try {
       const tops = topAddresses(ensureRegistry(state), 12);
@@ -1008,9 +1117,10 @@ class PaperEngine {
 
       if (this.dailyLossHit()) {
         state.agents.risk.flash = 'block';
-        state.cooldownUntil = now() + (settings.cooldownMs || 300000);
-        settings.running = false;
-        setBanner(state, 'Daily loss limit hit — cooldown', null);
+        state.cooldownUntil = Math.max(state.cooldownUntil || 0, now() + (settings.cooldownMs || 300000));
+        state.agents.risk.status = 'cooldown';
+        state.agents.risk.cooldownUntil = state.cooldownUntil;
+        setBanner(state, 'Daily loss limit hit — cooldown (exits still active)', null);
         addActivity(state, { type: 'risk', symbol: '—', agent: 'Risk', detail: 'Daily loss limit / cooldown' });
         this.persist();
         this.emit();
@@ -1080,8 +1190,17 @@ class PaperEngine {
 
       const openMints = new Set(state.positions.map((p) => p.mint));
       const eqNow = equity(state);
+      const moverOpen = state.positions.filter((x) => (x.lane || LANE.MOVER) === LANE.MOVER).length;
+      const maxMover = settings.maxMoverPositions != null ? settings.maxMoverPositions : 1;
       const candidates = scored.filter((p) => {
-        if (!p.pass || openMints.has(p.mint) || state.seenMints.includes(p.mint)) return false;
+        if (!p.pass || openMints.has(p.mint)) return false;
+        // Never re-buy a mint we already traded unless Mode B reclaim path
+        if (state.seenMints.includes(p.mint)) return false;
+        const block = mintBlocked(state, p.mint);
+        if (block.blocked) {
+          p.mintBlocked = block.why;
+          return false;
+        }
         // per-narrative exposure cap
         const tags = p.narratives || tagCoin(p);
         const maxNarr = settings.maxNarrativePct || 0.5;
@@ -1093,17 +1212,24 @@ class PaperEngine {
           }
         }
         const lane = p.lane || LANE.MOVER;
+        if (lane === LANE.MOVER && moverOpen >= maxMover) {
+          p.laneCapHit = true;
+          return false;
+        }
         if (!laneCapOk(lane, state.positions, eqNow, settings)) {
           p.laneCapHit = true;
           return false;
         }
         return true;
       });
-      // Prefer FRESH/GRAD over MOVER when scores are close
+      // Prefer never-traded FRESH/GRAD; novelty + lane priority over raw score ties
       candidates.sort((a, b) => {
+        const novelA = state.seenMints.includes(a.mint) ? 0 : 1;
+        const novelB = state.seenMints.includes(b.mint) ? 0 : 1;
+        if (settings.preferNovelMints !== false && novelA !== novelB) return novelB - novelA;
         if (settings.preferEarlyLanes !== false) {
           const dp = lanePriority(b.lane) - lanePriority(a.lane);
-          if (dp && Math.abs((b.score || 0) - (a.score || 0)) < 12) return dp;
+          if (dp && Math.abs((b.score || 0) - (a.score || 0)) < 14) return dp;
         }
         return (b.score || 0) - (a.score || 0);
       });
@@ -1139,6 +1265,10 @@ class PaperEngine {
     }
     if (state.positions.length >= settings.maxPositions) return null;
     if (!pair.priceUsd || pair.priceUsd <= 0) return null;
+    const isReclaim = !!(pair.breakdown || []).some((b) => b && b.k === 'reentry');
+    const block = mintBlocked(state, pair.mint, { allowScalpReclaim: isReclaim });
+    if (block.blocked) return null;
+    if (!isReclaim && state.seenMints.includes(pair.mint)) return null;
 
     const narrExp = exposureByNarrative(state.positions);
     const tags = pair.narratives || tagCoin(pair);
@@ -1430,6 +1560,19 @@ class PaperEngine {
 
     for (const pos of state.positions) {
       const live = byMint.get(pos.mint);
+      // Backfill missing time stops on legacy / CONTROL positions
+      if (!pos.timeStopAt && pos.openedAt) {
+        pos.timeStopAt = pos.openedAt + defaultTimeStopMs(pos);
+      }
+      // Dust zombies occupy slots and spam the feed — sweep even without a live quote
+      if (isDustPosition(pos, settings)) {
+        if (live && live.priceUsd) {
+          pos.markPrice = live.priceUsd;
+          pos.markValue = round(pos.tokens * live.priceUsd, 4);
+        }
+        closes.push({ pos, reason: 'dust', label: 'Risk dust sweep', sellPct: 1 });
+        continue;
+      }
       if (!live || !live.priceUsd) continue;
       const px = live.priceUsd;
       pos.markPrice = px;
@@ -1453,7 +1596,8 @@ class PaperEngine {
       state.agents.risk.status = 'guarding';
       state.agents.risk.lastRun = now();
 
-      if (!settings.running || state.killSwitch) continue;
+      // Protective exits always run (even during buy cooldown). Only killSwitch freezes exits.
+      if (state.killSwitch) continue;
 
       // Liquidity shock — impact-based exit (all modes)
       const shockLim = pos.liquidityShockPct != null ? pos.liquidityShockPct : 0.1;
@@ -1475,12 +1619,16 @@ class PaperEngine {
         pos.buyersFlatSince = null;
       }
       const modeTag = pos.tradeMode || 'RIDE';
-      if (pos.flowNegSince && now() - pos.flowNegSince >= 120000) {
-        const cut = modeTag === 'MOON' ? 0.35 : 0.5;
-        closes.push({ pos, reason: 'flow', label: 'Risk neg-flow cut', sellPct: cut });
+      // Sustained neg-flow: full exit (non-moon). Partial 50% spam left dust zombies.
+      if (pos.flowNegSince && now() - pos.flowNegSince >= 120000 && !pos._flowCutDone) {
+        const cut = modeTag === 'MOON' ? 0.4 : 1;
+        pos._flowCutDone = true;
+        closes.push({ pos, reason: 'flow', label: 'Risk neg-flow exit', sellPct: cut });
+        if (cut >= 0.999) continue;
       }
-      if (pos.buyersFlatSince && now() - pos.buyersFlatSince >= 5 * 60e3 && modeTag !== 'MOON') {
-        closes.push({ pos, reason: 'time', label: 'Risk flat-buyers exit', sellPct: 1 });
+      const flatMs = pos.flatBuyersMs != null ? pos.flatBuyersMs : modeTag === 'MOON' ? 45 * 60e3 : 5 * 60e3;
+      if (pos.buyersFlatSince && now() - pos.buyersFlatSince >= flatMs) {
+        closes.push({ pos, reason: 'time', label: 'Risk flat-buyers / momentum stall', sellPct: 1 });
         continue;
       }
 
@@ -1559,7 +1707,7 @@ class PaperEngine {
       }
     }
 
-    // Mode B re-entry: reclaim after spike scalp
+    // Mode B re-entry: one reclaim only, never after stop-loss blacklist
     if (settings.running && !state.killSwitch && state.scalpWatch && state.scalpWatch.length) {
       const keep = [];
       for (const w of state.scalpWatch) {
@@ -1568,7 +1716,9 @@ class PaperEngine {
           keep.push(w);
           continue;
         }
-        if ((w.reentries || 0) >= 2) continue;
+        if ((w.reentries || 0) >= 1) continue; // max 1 Mode B reclaim
+        const blocked = mintBlocked(state, w.mint, { allowScalpReclaim: true });
+        if (blocked.blocked && !blocked.reclaimOk) continue;
         if (state.positions.some((p) => p.mint === w.mint)) {
           keep.push(w);
           continue;
@@ -1632,7 +1782,12 @@ class PaperEngine {
     const idx = state.positions.findIndex((p) => p.id === pos.id);
     if (idx < 0) return null;
 
-    const pct = clamp(Number(sellPct) || 1, 0.01, 1);
+    let pct = clamp(Number(sellPct) || 1, 0.01, 1);
+    // Never leave dust remnants that spam the feed / occupy slots
+    const dust = (state.settings && state.settings.dustUsd) || 0.5;
+    const remBasis = Number(pos.remainingUsdBasis) || 0;
+    if (pct < 0.999 && remBasis * (1 - pct) < dust) pct = 1;
+    if (reason === 'dust') pct = 1;
     const tokensToSell = pos.tokens * pct;
     if (tokensToSell <= 0) return null;
 
@@ -1695,6 +1850,11 @@ class PaperEngine {
     if (fullClose) {
       state.positions.splice(idx, 1);
       delete state.whaleWatch[pos.mint];
+      recordMintExit(state, pos, reason);
+      // Drop scalp watch on stop / blacklist; keep only for genuine spike reclaim
+      if (reason === 'stop' || reason === 'liq_shock' || reason === 'dust') {
+        state.scalpWatch = (state.scalpWatch || []).filter((w) => w && w.mint !== pos.mint);
+      }
     }
 
     state.agents.risk.lastAction = {
@@ -1764,7 +1924,7 @@ class PaperEngine {
     if (fullClose) this.maybeProfitSweep();
 
     const type =
-      reason === 'stop' || reason === 'time' || reason === 'liq_shock'
+      reason === 'stop' || reason === 'time' || reason === 'liq_shock' || reason === 'dust'
         ? 'stopped'
         : reason === 'whale'
           ? 'whale_exit'
@@ -1796,6 +1956,8 @@ class PaperEngine {
                     ? `${pos.lane || ''} hard stop${modeBit}${armBit}${rBit}`.trim()
                     : reason === 'time'
                       ? `${pos.lane || 'FRESH'} time-stop${modeBit}`
+                      : reason === 'dust'
+                        ? `${pos.lane || ''} dust sweep${modeBit}`.trim()
                       : `${pos.lane || ''} trailing stop${modeBit}${armBit}`.trim(),
       amountUsd: proceeds,
       pnl,

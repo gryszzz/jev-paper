@@ -9,9 +9,9 @@ const LANE = {
 };
 
 const DEFAULT_LANE_CAPS = {
-  FRESH: 0.4, // fraction of equity open basis
+  FRESH: 0.45, // fraction of equity open basis
   GRAD: 0.4,
-  MOVER: 0.25,
+  MOVER: 0.15, // keep established/MOVER slots scarce
 };
 
 const LANE_DEFAULTS = {
@@ -36,7 +36,10 @@ const LANE_DEFAULTS = {
   gradMinLiq: 8000,
   gradBuyPctMult: 0.75,
   moverMinLiq: null, // use settings.minLiquidity
-  moverBuyPctMult: 0.85,
+  moverBuyPctMult: 0.7,
+  moverMaxAgeMs: 36 * 3600e3, // skip stale established unless breakout
+  moverTimeStopMs: 45 * 60e3,
+  gradTimeStopMs: 45 * 60e3,
   top10MaxPctFresh: 30,
 };
 
@@ -155,6 +158,13 @@ function laneGates(pair, laneInfo, settings = {}, rug = null) {
   if (lane === LANE.MOVER) {
     const minLiq = cfg.moverMinLiq != null ? cfg.moverMinLiq : settings.minLiquidity || 25000;
     if (liq < minLiq) return { ok: false, why: 'mover liq' };
+    const maxAge = cfg.moverMaxAgeMs != null ? cfg.moverMaxAgeMs : 36 * 3600e3;
+    if (age != null && age > maxAge) {
+      const ch5 = Number(pair.priceChangeM5) || 0;
+      const vol = Number(pair.volumeH1) || 0;
+      const breakout = ch5 >= 22 && vol >= Math.max(liq * 0.6, 15000);
+      if (!breakout) return { ok: false, why: 'mover too old' };
+    }
   }
 
   return { ok: true, why: 'pass' };
@@ -180,14 +190,22 @@ function laneRiskProfile(lane, settings = {}) {
       stopPct: cfg.freshStopPct,
       trailPct: cfg.freshTrailPct,
       takeProfitLadder: cfg.freshLadder,
-      timeStopMs: cfg.freshTimeStopMs,
+      timeStopMs: cfg.freshTimeStopMs || 15 * 60e3,
+    };
+  }
+  if (lane === LANE.GRAD) {
+    return {
+      stopPct: settings.stopPct,
+      trailPct: settings.trailPct != null ? settings.trailPct : 0.16,
+      takeProfitLadder: settings.takeProfitLadder,
+      timeStopMs: cfg.gradTimeStopMs || 45 * 60e3,
     };
   }
   return {
     stopPct: settings.stopPct,
     trailPct: settings.trailPct,
     takeProfitLadder: settings.takeProfitLadder,
-    timeStopMs: null,
+    timeStopMs: cfg.moverTimeStopMs || 45 * 60e3,
   };
 }
 

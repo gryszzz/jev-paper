@@ -7,6 +7,9 @@
  *  2) Apify X scraper actor if APIFY_TOKEN set
  *  3) Stub / manual ingest otherwise (disabled)
  * Feeds narrative heat + runnerScore narrative/X component.
+ *
+ * Free-tier discipline: at most ONE X counts request per tick, only for top
+ * candidates (cashtag / short CA), with multi-minute cache.
  */
 
 const { fetchJson } = require('./http');
@@ -21,6 +24,9 @@ const store = {
   mode: X_BEARER ? 'x-api' : APIFY_TOKEN ? 'apify' : 'stub',
   lastError: null,
   lastRunAt: 0,
+  lastQuery: null,
+  apiCalls: 0,
+  signals: 0,
 };
 
 function clamp(n, a, b) {
@@ -51,11 +57,11 @@ function ingestMentions({ symbol, mint, mentions = 1, kol = false, ts = Date.now
   if (kol) row.kolPosts += 1;
   row.samples.push({ ts, mentions, kol: !!kol });
   if (row.samples.length > 80) row.samples = row.samples.slice(-80);
-  // velocity = mentions in last ~15m proxy vs baseline
   const cut = Date.now() - 15 * 60e3;
   const recent = row.samples.filter((s) => s.ts >= cut).reduce((a, s) => a + (s.mentions || 0), 0);
   row.velocity = recent;
   row.lastAt = ts;
+  if (mentions > 0) store.signals += 1;
   return row;
 }
 
@@ -94,36 +100,66 @@ function xBuzzScore(pair) {
   };
 }
 
-async function pollXApi(tickers = []) {
-  if (!X_BEARER || !tickers.length) return [];
-  const q = tickers
-    .slice(0, 8)
-    .map((t) => `"$${t}"`)
-    .join(' OR ');
+function sanitizeTicker(t) {
+  return String(t || '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .slice(0, 16);
+}
+
+/**
+ * One cashtag counts query. Cached ~3 minutes. Returns total recent count.
+ */
+async function pollOneCashtag(symbol, mint) {
+  if (!X_BEARER) return null;
+  const tick = sanitizeTicker(symbol);
+  if (!tick || tick.length < 2) return null;
+  // Prefer cashtag; optionally OR short CA prefix (min 6 chars) for contract chatter
+  let q = `$${tick}`;
+  const ca = mint && String(mint).length >= 8 ? String(mint).slice(0, 8) : null;
+  if (ca) q = `($${tick} OR ${ca})`;
+  q = `${q} -is:retweet lang:en`;
   const url = `https://api.twitter.com/2/tweets/counts/recent?query=${encodeURIComponent(q)}&granularity=hour`;
+  const key = `x-counts-${tick}-${ca || 'x'}`;
   try {
     const d = await fetchJson(url, {
-      ttlMs: 120000,
-      key: `x-counts-${q.slice(0, 40)}`,
+      ttlMs: 180000, // 3 min cache — free-tier friendly
+      key,
       headers: { Authorization: `Bearer ${X_BEARER}` },
+      timeoutMs: 12000,
     });
     store.lastRunAt = Date.now();
     store.lastError = null;
-    return d.data || [];
+    store.lastQuery = tick;
+    store.apiCalls += 1;
+    const buckets = Array.isArray(d.data) ? d.data : [];
+    const total =
+      (d.meta && Number(d.meta.total_tweet_count)) ||
+      buckets.reduce((a, b) => a + (Number(b.tweet_count) || 0), 0);
+    // Last 2 hour buckets ≈ "velocity" proxy
+    const recent = buckets.slice(-2).reduce((a, b) => a + (Number(b.tweet_count) || 0), 0);
+    const mentions = Math.max(recent, Math.min(total, 40));
+    if (mentions > 0) {
+      ingestMentions({ symbol: tick, mint, mentions: Math.min(mentions, 25), ts: Date.now() });
+    } else {
+      // still register ticker so UI shows we queried
+      ensure(tick).lastAt = Date.now();
+    }
+    return { symbol: tick, total, recent, mentions };
   } catch (e) {
     store.lastError = e.message;
-    return [];
+    store.lastRunAt = Date.now();
+    return null;
   }
 }
 
-/** Apify actor run (async fire-and-forget style; results via webhook/manual ingest preferred). */
+/** Apify actor run (rate-limited). */
 async function triggerApifyScrape(tickers = []) {
   if (!APIFY_TOKEN || !tickers.length) return { ok: false, reason: 'APIFY_TOKEN unset or no tickers' };
   const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/runs?token=${APIFY_TOKEN}`;
   try {
     const body = JSON.stringify({
-      searchTerms: tickers.slice(0, 10).map((t) => `$${t}`),
-      maxTweets: 40,
+      searchTerms: tickers.slice(0, 5).map((t) => `$${sanitizeTicker(t)}`),
+      maxTweets: 30,
       addUserInfo: true,
     });
     const d = await fetchJson(url, {
@@ -143,17 +179,36 @@ async function triggerApifyScrape(tickers = []) {
   }
 }
 
+/**
+ * symbols: string[] OR { symbol, mint }[]
+ * Free-tier: at most 1 X API call per invocation, round-robin through top candidates.
+ */
 async function tickBuzz(symbols = []) {
   decay();
+  store.enabled = !!(X_BEARER || APIFY_TOKEN);
+  store.mode = X_BEARER ? 'x-api' : APIFY_TOKEN ? 'apify' : 'stub';
+  if (!store.enabled) return stats();
+
+  const items = (symbols || [])
+    .map((s) => (typeof s === 'string' ? { symbol: s, mint: null } : s))
+    .filter((s) => s && sanitizeTicker(s.symbol).length >= 2)
+    .slice(0, 8);
+  if (!items.length) return stats();
+
   if (X_BEARER) {
-    await pollXApi(symbols);
+    // Round-robin: pick next ticker we haven't refreshed in 3m
+    const now = Date.now();
+    let pick = items.find((it) => {
+      const row = store.byTicker[sanitizeTicker(it.symbol).toUpperCase()];
+      return !row || !row.lastAt || now - row.lastAt > 180000;
+    });
+    if (!pick) pick = items[0];
+    await pollOneCashtag(pick.symbol, pick.mint);
     return stats();
   }
-  if (APIFY_TOKEN && symbols.length) {
-    // Rate-limit: at most once / 30m
-    if (Date.now() - (store.lastRunAt || 0) > 30 * 60e3) {
-      await triggerApifyScrape(symbols);
-    }
+
+  if (APIFY_TOKEN && Date.now() - (store.lastRunAt || 0) > 30 * 60e3) {
+    await triggerApifyScrape(items.map((i) => i.symbol));
   }
   return stats();
 }
@@ -168,6 +223,9 @@ function stats() {
     mode: store.mode,
     lastRunAt: store.lastRunAt,
     lastError: store.lastError,
+    lastQuery: store.lastQuery,
+    apiCalls: store.apiCalls,
+    signals: store.signals,
     tickers: Object.keys(store.byTicker).length,
     top,
   };

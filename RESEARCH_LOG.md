@@ -438,3 +438,45 @@ Promote T* only if OOS expectancy &gt; Control and DD &lt; Control.
 - Fold 3 (n=10): taken=3 win=33.3% pnl=$-2.1236
 
 > Caveat: Dex `priceChange` windows are noisy labels (look-ahead haircut 40%). Treat as research ranking, not live expectancy.
+
+---
+
+## Tuning run — 11/2/2026 5:05 PM ET (routine)
+
+**Snapshot:** equity $85.65 (−14.35% from $100; peak $113.22), cash $63.46, 14 closed (4W/8L), realized −$15.08, loss streak 3. Bot **stopped** (`running=false`) after daily-loss limit (12%) + loss-streak cooldown; cooldown itself expired ~16:40 ET.
+
+| Slice | n | W/L | PnL |
+|---|---|---|---|
+| MOVER | 7 | 4/2 | −$4.98 |
+| GRAD | 5 | 0/4 | −$6.09 |
+| FRESH | 2 | 0/2 | −$4.01 |
+| aggressive preset | 10 | 4 W | −$12.04 |
+| ab_harness CONTROL (SCALP) | 2 | 0/2 | −$3.04 |
+| T1/T2/T3 | 0 | — | — |
+
+**Observations (no param change — every slice < 20 closed trades):**
+1. GRAD hard stops fill at −97% (ANSEMKIN R52) and POGE held at −95%: % stop can't protect against liquidity pulls → pre-entry liquidity/LP veto + impact-based exit is the real fix.
+2. MOVER neg-flow cut re-fires every ~8s halving a dust position (WASTED): dozens of $0.00 sells, nonsense pnlPct (−5700%). Needs dust force-close + one-shot cut.
+3. Legacy positions have no `timeStopAt` (three/WASTED/POGE held 45–55 min).
+4. A/B arms T1–T3 have 0 trades; runner≥55/70 gates rarely pass on free data.
+
+**Concurrent work in progress (uncommitted, another worker, 17:04–17:06 ET):** mint cooldown/blacklist, dust close, MOVER age gate + caps, time-stop backfill, auto-resume after daily-loss. Covers 2 & 3 above; routine did not edit code to avoid collision.
+
+**Next hypotheses (once ≥20 on slice):** (H1) GRAD lane: require liq ≥ $15k and LP/impact check, or drop GRAD SCALP < R55. (H2) Count rug-stops separately and measure expectancy ex-rugs to see if exits or entries are the leak.
+
+## 2026-11-02 — v17 hold / rebuy / novelty / X buzz
+
+### Live diagnosis (pre-fix)
+- Open holds: `three` MOVER ~52m (token age ~187d), `WASTED`/`POGE` dust zombies from repeated 50% neg-flow cuts.
+- Activity flooded with same-symbol micro-sells; slots blocked so FRESH starved (lane buys FRESH2 / GRAD5 / MOVER7).
+- `timeStopAt` null for GRAD/MOVER (laneRisk only set FRESH); CONTROL `timeStopMs: null`.
+- Daily loss set `running=false`, which **froze protective exits** in `tickPrices`.
+
+### Fixes
+1. Per-mint cooldown (45m) + stop-loss blacklist (24h); Mode B reclaim capped at 1.
+2. Max hold: FRESH/SCALP 15m, GRAD/MOVER/RIDE 45m, MOON trail + stall; backfill legacy positions.
+3. Novelty bias + MOVER age gate / cap 1 open MOVER; prefer never-traded FRESH/GRAD.
+4. Dust sweep + neg-flow full exit; protective exits run even during buy cooldown.
+5. X buzz: bearer-enabled, 1 cached counts query/tick for top candidates only.
+
+LIVE_ENABLED remains false.

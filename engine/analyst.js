@@ -177,6 +177,23 @@ async function scorePair(pair, settings, ctx = {}) {
     breakdown.push({ k: 'mcapCap', v: -6, note: 'approaching cap' });
   }
 
+  // Novelty: never-before-traded new pairs get a bonus; repeat/old MOVER get hit
+  const seen = (ctx.state && Array.isArray(ctx.state.seenMints) && ctx.state.seenMints.includes(pair.mint));
+  if (!seen && (lane === LANE.FRESH || lane === LANE.GRAD)) {
+    score += 8;
+    breakdown.push({ k: 'novelty', v: 8, note: 'never-traded launch' });
+  } else if (!seen && lane === LANE.MOVER && ageH < 6) {
+    score += 3;
+    breakdown.push({ k: 'novelty', v: 3, note: 'young mover' });
+  } else if (seen) {
+    score -= 20;
+    breakdown.push({ k: 'novelty', v: -20, note: 'already traded' });
+  }
+  if (lane === LANE.MOVER && ageH > 48) {
+    score -= 15;
+    breakdown.push({ k: 'staleMover', v: -15, note: `${ageH.toFixed(0)}h old` });
+  }
+
   const social = await socialVelocity(pair);
   const socPts = Math.round((social.score / 100) * 8);
   score += socPts;
