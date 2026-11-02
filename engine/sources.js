@@ -30,12 +30,17 @@ async function pumpNewTokens() {
               ? Number(created) * 1000
               : Number(created)
             : null;
+          // Paper curve liq ≈ 2 * virtual SOL * ~$SOL (both sides of the curve)
+          const solUsd = Number(process.env.SOL_USD_HINT) || 180;
+          const curveLiq = vSol > 0 ? vSol * solUsd * 2 : (mc > 0 ? Math.min(mc * 0.4, 25000) : 0);
           return {
             mint: c.mint || c.address,
             symbol: c.symbol,
             name: c.name,
             icon: c.image_uri || c.imageUri || c.uri,
             marketCap: mc,
+            liquidity: curveLiq,
+            priceUsd: Number(c.price_usd || c.usd_price || 0) || (mc > 0 ? mc / 1e9 : 0),
             createdAt: created,
             createdMs,
             complete: !!(c.complete || c.raydium_pool),
@@ -44,6 +49,7 @@ async function pumpNewTokens() {
             kingOfHill: !!(c.king_of_the_hill_timestamp || c.kingOfTheHillTimestamp),
             hasSocials: !!(c.twitter || c.telegram || c.website),
             creator: c.creator || c.deployer || null,
+            fromPump: true,
             source: 'pump.fun',
           };
         })
@@ -74,17 +80,22 @@ async function pumpGraduating() {
           const mc = Number(c.usd_market_cap || 0);
           const vSol = Number(c.virtual_sol_reserves || 0);
           const bondingProgress = c.complete ? 1 : vSol > 0 ? Math.min(1, vSol / 85) : Math.min(1, mc / 85000);
+          const solUsd = Number(process.env.SOL_USD_HINT) || 180;
+          const curveLiq = vSol > 0 ? vSol * solUsd * 2 : (mc > 0 ? Math.min(mc * 0.35, 40000) : 8000);
           return {
             mint: c.mint,
             symbol: c.symbol,
             name: c.name,
             icon: c.image_uri,
             marketCap: mc,
+            liquidity: curveLiq,
+            priceUsd: Number(c.price_usd || 0) || (mc > 0 ? mc / 1e9 : 0),
             bondingProgress,
             complete: !!c.complete,
             graduating: bondingProgress >= 0.7 || !!c.complete,
             hasSocials: !!(c.twitter || c.telegram || c.website),
             creator: c.creator || null,
+            fromPump: true,
             source: 'pump.grad',
           };
         })

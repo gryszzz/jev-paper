@@ -1311,6 +1311,51 @@ class PaperEngine {
       for (const m of mintSet) pushP(m);
       const mints = priority.slice(0, 64);
       const pairs = await this.fetchPairsForMints(mints);
+      // Synthesize FRESH pairs from pump/realtime when DexScreener has no pool yet
+      {
+        const have = new Set(pairs.map((x) => x.mint));
+        for (const mint of mints) {
+          if (have.has(mint)) continue;
+          const pm = pumpMeta.get(mint);
+          if (!pm) continue;
+          const ageMs = pm.createdMs ? now() - pm.createdMs : (pm.ts ? now() - pm.ts : 60e3);
+          const liq = Number(pm.liquidity) || 0;
+          const mc = Number(pm.marketCap) || 0;
+          // Need some price signal for paper fills
+          let price = Number(pm.priceUsd) || 0;
+          if (!price && mc > 0) price = mc / 1e9; // pump supply proxy
+          if (!price) price = 1e-8;
+          pairs.push({
+            mint,
+            symbol: (pm.symbol || '???').slice(0, 12),
+            name: pm.name || pm.symbol || 'Unknown',
+            icon: pm.icon || icons.get(mint) || null,
+            priceUsd: price,
+            liquidity: liq || Math.max(800, mc * 0.25),
+            volumeM5: 0,
+            volumeH1: 0,
+            volumeH24: 0,
+            buysM5: 0,
+            sellsM5: 0,
+            buysH1: 0,
+            sellsH1: 0,
+            marketCap: mc,
+            fdv: mc,
+            pairCreatedAt: pm.createdMs || (pm.ts ? pm.ts : now() - ageMs),
+            ageMs,
+            priceChangeM5: 0,
+            priceChangeH1: 0,
+            bondingProgress: pm.bondingProgress,
+            hasSocials: !!pm.hasSocials,
+            creator: pm.creator || null,
+            source: pm.source || 'pump.fun',
+            fromPump: true,
+            graduating: !!pm.graduating,
+            dexId: 'pumpfun',
+          });
+          have.add(mint);
+        }
+      }
       for (const p of pairs) {
         if (!p.icon && icons.has(p.mint)) p.icon = icons.get(p.mint);
         const pm = pumpMeta.get(p.mint);
@@ -1331,6 +1376,10 @@ class PaperEngine {
           }
           if (!p.icon && pm.icon) p.icon = pm.icon;
           if (!p.marketCap && pm.marketCap) p.marketCap = pm.marketCap;
+          p.fromPump = true;
+          // Prefer curve liq when DS hasn't indexed yet / reports dust
+          if (pm.liquidity && (!(p.liquidity) || p.liquidity < 1000)) p.liquidity = pm.liquidity;
+          if (pm.priceUsd && (!(p.priceUsd) || p.priceUsd <= 0)) p.priceUsd = pm.priceUsd;
         }
         if (graduating.has(p.mint)) {
           p.graduating = true;
@@ -1454,8 +1503,14 @@ class PaperEngine {
           if (!g.ok) return false;
           // lane-specific liquidity floor (gates handle FRESH/GRAD/MOVER)
           if (p.lane === LANE.MOVER && p.liquidity < Math.max(15000, settings.minLiquidity || 15000)) return false;
-          if (p.lane === LANE.FRESH && (p.liquidity || 0) < ((settings.lanes && settings.lanes.freshMinLiq) || 5000)) return false;
-          if (p.lane === LANE.GRAD && p.liquidity > 0 && p.liquidity < Math.max(15000, (settings.lanes && settings.lanes.gradMinLiq) || 15000)) return false;
+          // FRESH: allow pump-curve synthetics; only reject dust
+          if (p.lane === LANE.FRESH) {
+            const floor = Math.min(2500, (settings.lanes && settings.lanes.freshMinLiq) || 800);
+            const liq = Number(p.liquidity) || 0;
+            if (liq > 0 && liq < Math.min(floor, 500) && !p.fromPump) return false;
+            if (liq > 0 && liq < 300) return false;
+          }
+          if (p.lane === LANE.GRAD && p.liquidity > 0 && p.liquidity < Math.max(8000, (settings.lanes && settings.lanes.gradMinLiq) || 8000)) return false;
           return true;
         })
         .sort((a, b) => {
@@ -1812,8 +1867,24 @@ class PaperEngine {
       const minEntry = settings.minEntryLiquidity != null ? settings.minEntryLiquidity : 15000;
       const liqNow = Number(pair.liquidity) || 0;
       const laneGuess = pair.lane || LANE.MOVER;
-      const floor = laneGuess === LANE.FRESH ? Math.min(minEntry, 5000) : minEntry;
-      if (liqNow > 0 && liqNow < floor) {
+      const floor = laneGuess === LANE.FRESH
+        ? Math.min(minEntry, (settings.lanes && settings.lanes.freshMinLiq) || 800)
+        : minEntry;
+      const isPumpFresh = laneGuess === LANE.FRESH && (pair.fromPump || /pump/i.test(String(pair.source || '')));
+      if (isPumpFresh) {
+        if (liqNow > 0 && liqNow < 300) {
+          addActivity(state, {
+            type: 'skip',
+            symbol: pair.symbol,
+            icon: pair.icon,
+            agent: 'Risk',
+            detail: `fresh dust liq $${Math.round(liqNow)}`,
+            mint: pair.mint,
+            lane: laneGuess,
+          });
+          return null;
+        }
+      } else if (liqNow > 0 && liqNow < floor) {
         addActivity(state, {
           type: 'skip',
           symbol: pair.symbol,
@@ -1868,7 +1939,10 @@ class PaperEngine {
     const rScore = Number(pair.runnerScore) || 0;
     const arm = settings.abHarness === false ? AB_ARMS.CONTROL : pickArm(state, rScore);
     // pickArm already falls through when gate fails; keep a soft log only if CONTROL substituted
-    if (arm.useRunnerGate && rScore < (arm.minRunner || 30)) {
+    const armMinRunner = lane === LANE.FRESH
+      ? Math.max(15, (arm.minRunner || 30) - 15)
+      : (arm.minRunner || 30);
+    if (arm.useRunnerGate && rScore < armMinRunner) {
       // Should be rare after pickArm fallthrough — skip rather than take under-gated treatment
       addActivity(state, {
         type: 'skip',

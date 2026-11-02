@@ -55,7 +55,7 @@ async function scorePair(pair, settings, ctx = {}) {
   const liq = pair.liquidity || 0;
   let minLiq = settings.minLiquidity || 15000;
   // Absolute floor $15k on GRAD/MOVER to avoid rug fills through %-stops; FRESH slightly softer.
-  if (lane === LANE.FRESH) minLiq = Math.max(5000, Math.min(minLiq, (settings.lanes && settings.lanes.freshMinLiq) || 5000));
+  if (lane === LANE.FRESH) minLiq = Math.max(500, Math.min(minLiq, (settings.lanes && settings.lanes.freshMinLiq) || 800));
   else if (lane === LANE.GRAD) minLiq = Math.max(15000, (settings.lanes && settings.lanes.gradMinLiq) || 15000);
   else minLiq = Math.max(15000, minLiq);
   if (liq < minLiq) {
@@ -302,10 +302,10 @@ async function scorePair(pair, settings, ctx = {}) {
   }
 
   finalScore = clamp(Math.round(finalScore), 0, 100);
-  // Lane-specific minScore: fresh slightly lower barrier (edge decays fast)
+  // Lane-specific minScore: FRESH much lower — edge decays in minutes
   let minScore = settings.minScore || 70;
-  if (lane === LANE.FRESH) minScore = Math.max(52, minScore - 8);
-  else if (lane === LANE.GRAD) minScore = Math.max(55, minScore - 5);
+  if (lane === LANE.FRESH) minScore = Math.max(42, minScore - 16);
+  else if (lane === LANE.GRAD) minScore = Math.max(50, minScore - 8);
 
   const runner = runnerScore(pair, {
     rug,
@@ -318,10 +318,13 @@ async function scorePair(pair, settings, ctx = {}) {
   const bandAct = runnerBandAction(runner.score);
   // Gate: analyst minScore AND runner band (unless runner disabled)
   const requireRunner = settings.abHarness !== false || settings.minRunnerScore != null;
-  const minRunner = settings.minRunnerScore != null ? settings.minRunnerScore : 40;
+  let minRunner = settings.minRunnerScore != null ? settings.minRunnerScore : 40;
+  // FRESH curve coins often lack DS volume → don't let runner starve novelty entries
+  if (lane === LANE.FRESH) minRunner = Math.max(18, minRunner - 18);
+  else if (lane === LANE.GRAD) minRunner = Math.max(28, minRunner - 8);
   let pass = finalScore >= minScore;
   if (requireRunner) {
-    if (runner.veto) pass = false;
+    if (runner.veto && lane !== LANE.FRESH) pass = false;
     else if (runner.score < minRunner) pass = false;
   }
 

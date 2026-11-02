@@ -17,7 +17,7 @@ const DEFAULT_LANE_CAPS = {
 const LANE_DEFAULTS = {
   maxMarketCapUsd: 8_000_000,
   freshMaxAgeMs: 25 * 60e3,
-  freshMinLiq: 5000,
+  freshMinLiq: 800,
   freshMaxLiq: 120000,
   freshMaxMcap: 350_000,
   freshBuyPctMult: 0.55, // smaller size
@@ -132,19 +132,25 @@ function laneGates(pair, laneInfo, settings = {}, rug = null) {
   }
 
   if (lane === LANE.FRESH) {
-    if (liq > 0 && liq < cfg.freshMinLiq) return { ok: false, why: 'fresh liq low' };
+    const minFreshLiq = Math.min(cfg.freshMinLiq || 800, 2500);
+    // Allow brand-new curve coins with estimated/zero DS liq through; only reject clearly thin established
+    if (liq > 0 && liq < minFreshLiq && !(pair.fromPump || String(pair.source || '').includes('pump')) ) {
+      return { ok: false, why: 'fresh liq low' };
+    }
+    if (liq > 0 && liq < 400) return { ok: false, why: 'fresh liq dust' };
     if (age != null && age > cfg.freshMaxAgeMs) return { ok: false, why: 'fresh too old' };
     const top10 = (rug && (rug.top10Pct || rug.topHolderPct)) || pair.top10Pct;
-    if (top10 != null && top10 > cfg.top10MaxPctFresh) return { ok: false, why: `top10 ${Math.round(top10)}%` };
+    if (top10 != null && top10 > Math.max(cfg.top10MaxPctFresh || 30, 45)) return { ok: false, why: `top10 ${Math.round(top10)}%` };
     if (rug && rug.bundled) return { ok: false, why: 'bundled' };
     if (pair.sniper && pair.sniper.bundled) return { ok: false, why: 'bundle cluster' };
-    // prefer socials but don't hard-require when WS-fresh (data lag)
+    // Ultra-young (<3m): skip buy/sell pressure gates — DS lag / curve noise
     const bpm = Number(pair.buyersPerMin) || 0;
     const buys = Number(pair.buysM5) || 0;
     const sells = Math.max(Number(pair.sellsM5) || 0, 1);
     const ratio = buys / sells;
-    if (buys + sells >= 4 && ratio < 0.85) return { ok: false, why: 'weak buy:sell' };
-    if (bpm > 0 && bpm < 0.4 && age != null && age > 3 * 60e3) return { ok: false, why: 'buyers/min flat' };
+    const ultraYoung = age != null && age < 3 * 60e3;
+    if (!ultraYoung && buys + sells >= 8 && ratio < 0.7) return { ok: false, why: 'weak buy:sell' };
+    if (!ultraYoung && bpm > 0 && bpm < 0.25 && age != null && age > 8 * 60e3) return { ok: false, why: 'buyers/min flat' };
   }
 
   if (lane === LANE.GRAD) {
