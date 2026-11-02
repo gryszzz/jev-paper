@@ -3,6 +3,7 @@
 
   const $ = (id) => document.getElementById(id);
   let state = null;
+  let deskTradeLimit = 30;
   let tf = '1D';
   let odoTarget = 0;
   let odoShown = 0;
@@ -368,13 +369,14 @@
       </div>`;
     }).join('');
 
-    const trades = (state.activity || []).filter((it) => {
+    const allTrades = (state.activity || []).filter((it) => {
       const t = (it.type || '').toLowerCase();
       return t === 'buy' || t === 'sell' || t === 'tp' || t === 'stopped' || t === 'stop' || it.pnl != null || it.amountUsd != null;
-    }).slice(0, 40);
+    });
+    const trades = allTrades.slice(0, deskTradeLimit);
     const stack = $('tradeStack');
     const countEl = $('tradesCount');
-    if (countEl) countEl.textContent = String(trades.length);
+    if (countEl) countEl.textContent = String(allTrades.length);
     if (!trades.length) {
       stack.innerHTML = '<div class="trade-empty">No paper trades yet — desk is scanning</div>';
     } else {
@@ -405,9 +407,20 @@
           ${right}
         </div>`;
       }).join('');
+      if (allTrades.length > trades.length) {
+        stack.innerHTML += `<button type="button" class="trade-more" id="tradeMoreBtn">Show older (${allTrades.length - trades.length} more)</button>`;
+      }
       stack.querySelectorAll('.trade-row').forEach((el) => {
         el.onclick = () => openCoin(el.dataset.mint);
       });
+      const more = $('tradeMoreBtn');
+      if (more) {
+        more.onclick = (e) => {
+          e.stopPropagation();
+          deskTradeLimit += 30;
+          renderDesk();
+        };
+      }
     }
   }
 

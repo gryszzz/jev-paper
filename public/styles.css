@@ -216,13 +216,11 @@ body { min-height: 100dvh; }
 .muted-count { font-size: 10px; color: var(--muted); font-weight: 600; }
 .trade-feed {
   display: flex; flex-direction: column; gap: 0;
-  max-height: min(340px, calc(100dvh - 470px));
-  min-height: 220px;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  /* Page scrolls — no inner scroll box */
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--card);
+  margin-bottom: 8px;
 }
 .trade-row {
   display: grid;
@@ -434,7 +432,7 @@ body { min-height: 100dvh; }
   #equityChart { height: 118px; }
   .desk-bot .bot-wrap { width: 36px; height: 38px; }
   .desk-bot svg.pixel-bot { width: 32px; height: 32px; }
-  .trade-feed { min-height: 200px; max-height: min(360px, calc(100dvh - 440px)); }
+  /* trade-feed: no capped height — page scroll */
 }
 
 /* Lane tags */
@@ -451,3 +449,11 @@ body { min-height: 100dvh; }
 .lane-fresh { background: rgba(0,255,102,0.18); color: #00FF66; }
 .lane-grad { background: rgba(167,139,250,0.22); color: #c4b5fd; }
 .lane-mover { background: rgba(56,189,248,0.16); color: #38bdf8; }
+
+.trade-more {
+  display: block; width: 100%; border: none; border-top: 1px solid #15151a;
+  background: transparent; color: var(--purple2);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  padding: 12px 8px; cursor: pointer; text-align: center;
+}
+.trade-more:active { background: rgba(167,139,250,0.08); }
