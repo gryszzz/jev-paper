@@ -1125,7 +1125,7 @@ class PaperEngine {
       'slippage', 'minScore', 'running', 'kellyCap', 'maxDailyLossPct', 'cooldownMs',
       'whaleDropPct', 'whalePollMs', 'preferGraduating', 'preferEarlyLanes', 'maxMarketCapUsd',
       'lossStreakLimit', 'lossStreakCooldownMs', 'maxNarrativePct', 'profitSweepPct', 'profitSweepTrigger',
-      'abHarness', 'minRunnerScore', 'riskPerTradePct', 'minEntryLiquidity', 'liqPullExitPct', 'dustUsd', 'mintCooldownMs',
+      'abHarness', 'minRunnerScore', 'riskPerTradePct', 'minEntryLiquidity', 'liqPullExitPct', 'dustUsd', 'mintCooldownMs', 'maxMoverPositions',
       'liveMaxPerTradeUsd', 'liveMaxDailySpendUsd', 'liveMaxDailyLossUsd', 'liveWalletBalanceCapUsd',
     ];
     for (const k of keys) {
