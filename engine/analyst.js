@@ -186,18 +186,49 @@ async function scorePair(pair, settings, ctx = {}) {
   const seenLedger = tradedLedgerRef ? tradedLedgerRef.everTraded(pair.mint) : false;
   const seen = seenMem || seenLedger;
   const neverSeen = !seen;
-  if (neverSeen && (lane === LANE.FRESH || pair.source === 'pumpportal' || pair.fromPump)) {
+  // Novelty only for quality-passing never-seen coins (hard image/name filter upstream)
+  const qualityOk = pair.freshQualityOk !== false && !pair._freshReject && !pair.imageReuse && !pair.nameDup;
+  if (neverSeen && qualityOk && (lane === LANE.FRESH || pair.source === 'pumpportal' || pair.fromPump)) {
     score += 22;
     breakdown.push({ k: 'novelty', v: 22, note: 'brand-new FRESH launch' });
-  } else if (neverSeen && lane === LANE.GRAD) {
+  } else if (neverSeen && qualityOk && lane === LANE.GRAD) {
     score += 14;
     breakdown.push({ k: 'novelty', v: 14, note: 'never-traded grad' });
-  } else if (neverSeen && lane === LANE.MOVER && ageH < 6) {
+  } else if (neverSeen && qualityOk && lane === LANE.MOVER && ageH < 6) {
     score += 5;
     breakdown.push({ k: 'novelty', v: 5, note: 'young mover' });
   } else if (seen) {
     score -= 28;
     breakdown.push({ k: 'novelty', v: -28, note: 'already traded (ledger)' });
+  } else if (neverSeen && !qualityOk) {
+    score -= 10;
+    breakdown.push({ k: 'novelty', v: -10, note: 'junk/dupe — no novelty' });
+  }
+  // Soft socials (never a hard gate): small bonus / mild penalty
+  {
+    const hasSocial = !!(pair.hasSocials || pair.twitter || pair.telegram ||
+      (pair.websites && pair.websites.length) ||
+      (pair.socials && (pair.socials.twitter || pair.socials.telegram || (Array.isArray(pair.socials) && pair.socials.length))));
+    if (lane === LANE.FRESH || pair.fromPump) {
+      if (hasSocial) {
+        score += 3;
+        breakdown.push({ k: 'socials', v: 3, note: 'optional bonus' });
+      } else {
+        score -= 2;
+        breakdown.push({ k: 'socials', v: -2, note: 'missing (soft)' });
+      }
+    }
+  }
+  // Traction priority for FRESH
+  if (lane === LANE.FRESH) {
+    const tr = Number(pair.freshTraction) || 0;
+    if (tr >= 8) {
+      score += 8;
+      breakdown.push({ k: 'traction', v: 8, note: 'unique buyers/vol/smart' });
+    } else if (tr >= 4) {
+      score += 4;
+      breakdown.push({ k: 'traction', v: 4, note: 'early buyers' });
+    }
   }
   if (tradedLedgerRef && tradedLedgerRef.isStaleOnBoard(pair.mint)) {
     score -= 16;

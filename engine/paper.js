@@ -1347,6 +1347,10 @@ class PaperEngine {
             priceChangeH1: 0,
             bondingProgress: pm.bondingProgress,
             hasSocials: !!pm.hasSocials,
+            twitter: pm.twitter || null,
+            telegram: pm.telegram || null,
+            website: pm.website || null,
+            description: pm.description || '',
             creator: pm.creator || null,
             source: pm.source || 'pump.fun',
             fromPump: true,
@@ -1380,6 +1384,10 @@ class PaperEngine {
           // Prefer curve liq when DS hasn't indexed yet / reports dust
           if (pm.liquidity && (!(p.liquidity) || p.liquidity < 1000)) p.liquidity = pm.liquidity;
           if (pm.priceUsd && (!(p.priceUsd) || p.priceUsd <= 0)) p.priceUsd = pm.priceUsd;
+          if (pm.description && !p.description) p.description = pm.description;
+          if (pm.twitter) p.twitter = pm.twitter;
+          if (pm.telegram) p.telegram = pm.telegram;
+          if (pm.website) p.website = pm.website;
         }
         if (graduating.has(p.mint)) {
           p.graduating = true;
@@ -1404,15 +1412,23 @@ class PaperEngine {
         state._telegramMentions = telegramMentionsFromPairs(pairs);
       } catch (_) { state._telegramMentions = []; }
       const copyMap = eyes.annotateCopycats(pairs);
+      // Persist recent icons/names for cross-scan image/name dedupe (memory, capped)
+      state._seenTokenMeta = state._seenTokenMeta || [];
+      const imgDup = eyes.annotateImageAndNameDupes(pairs, state._seenTokenMeta);
       const whaleScores = eyes.whaleClusterScore(state._whaleBuyEvents || []);
       state._themeFirstSeen = state._themeFirstSeen || {};
       const clusters = detectClusters(pairs.slice(0, 60));
       const recentTw = (() => { try { return xbuzz.recentTweets(30 * 60e3); } catch (_) { return []; } })();
       for (const p of pairs) {
         const cc = copyMap.get(p.mint) || { copycatPenalty: 0, isOriginal: true, clones: 1 };
-        p.copycatPenalty = cc.copycatPenalty || 0;
-        p.isOriginal = !!cc.isOriginal;
+        const iq = imgDup.get(p.mint) || { imageReuse: false, nameDup: false, tickerDup: false, isOriginal: true, qualityPenalty: 0, reasons: [] };
+        p.copycatPenalty = Math.max(cc.copycatPenalty || 0, iq.qualityPenalty || 0);
+        p.isOriginal = !!(cc.isOriginal && iq.isOriginal);
         p.copycatClones = cc.clones || 1;
+        p.imageReuse = !!iq.imageReuse;
+        p.nameDup = !!iq.nameDup;
+        p.tickerDup = !!iq.tickerDup;
+        p._quality = iq;
         const wc = whaleScores.get(p.mint);
         p.whaleCluster = wc ? wc.whaleCluster : 0;
         const vm = viral.matchViral(p);
@@ -1434,7 +1450,31 @@ class PaperEngine {
         eyesBoost += Math.min(7, (p.whaleCluster || 0) * 0.35);
         eyesBoost += Math.min(5, (p.firstMover || 0) * 0.25);
         eyesBoost -= Math.min(12, (p.copycatPenalty || 0) * 0.5);
+        // FRESH quality: hard image/name/ticker; socials soft only; traction bonus
+        const fq = eyes.freshQuality(p);
+        p.freshQualityOk = fq.pass;
+        p.freshQualityReasons = fq.reasons;
+        p.freshTraction = fq.traction || 0;
+        eyesBoost += fq.softBonus || 0;
+        eyesBoost -= fq.softPenalty || 0;
+        if (!fq.pass && (p.lane === LANE.FRESH || p.fromPump)) {
+          eyesBoost -= 20;
+          p._freshReject = true;
+        }
         p._eyesBoost = Math.round(eyesBoost);
+        // Remember meta for next-scan image/name dedupe
+        try {
+          state._seenTokenMeta.push({
+            mint: p.mint,
+            symbol: p.symbol,
+            name: p.name,
+            icon: p.icon,
+            liquidity: p.liquidity,
+            pairCreatedAt: p.pairCreatedAt,
+            ageMs: p.ageMs,
+          });
+          if (state._seenTokenMeta.length > 400) state._seenTokenMeta = state._seenTokenMeta.slice(-400);
+        } catch (_) {}
       }
 
       // Catalyst stream: ingest every new coin / pool / boost, then match + early traction
@@ -1498,6 +1538,13 @@ class PaperEngine {
         .filter((p) => !isMajor(p) && p.priceUsd > 0)
         .filter((p) => !state.ruggedDevs.includes(p.mint))
         .filter((p) => {
+          // Hard quality: reused image / dup name-ticker never enter FRESH book
+          if (p._freshReject || p.freshQualityOk === false) {
+            if (p.lane === LANE.FRESH || p.fromPump || String(p.source || '').includes('pump')) {
+              p._laneGate = { ok: false, why: (p.freshQualityReasons || ['quality']).join('+') };
+              return false;
+            }
+          }
           const g = laneGates(p, p._laneInfo || classifyLane(p, settings), settings);
           p._laneGate = g;
           if (!g.ok) return false;
