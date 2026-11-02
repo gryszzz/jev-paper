@@ -1,77 +1,131 @@
 'use strict';
 
 const { rugcheck, socialVelocity } = require('./sources');
+const { applyWeights, ensureWeights } = require('./feedback');
+const { tagCoin, narrativeHeat } = require('./narratives');
+const { smartMoneyOverlap } = require('./smartMoney');
 
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
 }
 
-async function scorePair(pair, settings) {
+/**
+ * Detect bundled/sniper-ish concentration from top holders + age.
+ * Heuristic (free data): many top wallets with near-equal % shortly after launch.
+ */
+function detectBundledSnipers(rug, ageH) {
+  const top = (rug && rug.topHoldersDetail) || [];
+  if (!top.length) {
+    const topPct = (rug && rug.topHolderPct) || 0;
+    let sniperRisk = 0;
+    if (ageH < 0.5 && topPct > 35) sniperRisk = 12;
+    else if (ageH < 2 && topPct > 45) sniperRisk = 10;
+    else if (topPct > 55) sniperRisk = 8;
+    return { sniperRisk, bundled: topPct > 40 && ageH < 1, note: `top ${Math.round(topPct)}%` };
+  }
+  const pcts = top.map((h) => Number(h.pct) || 0).filter((x) => x > 0.3);
+  if (pcts.length < 3) return { sniperRisk: 0, bundled: false, note: 'sparse' };
+  const mean = pcts.reduce((a, b) => a + b, 0) / pcts.length;
+  const variance = pcts.reduce((a, b) => a + (b - mean) ** 2, 0) / pcts.length;
+  const similar = variance < 4 && pcts.length >= 4 && ageH < 2;
+  const sniperRisk = similar ? 14 : ageH < 0.25 && pcts[0] > 8 ? 8 : 0;
+  return { sniperRisk, bundled: similar, note: similar ? 'bundled-like' : 'ok' };
+}
+
+/** Unique buyers / minute proxy from m5 + h1 txn counts. */
+function buyersPerMinute(pair) {
+  const buysM5 = Number(pair.buysM5) || 0;
+  const buysH1 = Number(pair.buysH1) || 0;
+  const perMin5 = buysM5 / 5;
+  const perMinH1 = buysH1 / 60;
+  return Math.max(perMin5, perMinH1 * 0.5);
+}
+
+async function scorePair(pair, settings, ctx = {}) {
   const breakdown = [];
   let score = 0;
+  const state = ctx.state;
+  const weights = state ? ensureWeights(state) : null;
+  const heatMap = ctx.heatMap || {};
+  const smartReg = ctx.smartMoney || null;
 
   const liq = pair.liquidity || 0;
   if (liq < (settings.minLiquidity || 38000)) {
     return { score: 0, pass: false, breakdown: [{ k: 'liquidity', v: 0, note: 'below min' }], rug: null };
   }
-  const liqScore = clamp((Math.log10(liq) - Math.log10(settings.minLiquidity)) / 2, 0, 1) * 18;
+  const liqScore = clamp((Math.log10(liq) - Math.log10(settings.minLiquidity)) / 2, 0, 1) * 16;
   score += liqScore;
   breakdown.push({ k: 'liquidity', v: Math.round(liqScore), note: `$${Math.round(liq / 1000)}k` });
 
-  const vol5 = pair.volumeM5 || pair.volumeH1 / 12 || 0;
   const vol1 = pair.volumeH1 || 0;
-  const volScore = clamp(Math.log10(Math.max(vol1, 1)) / 6, 0, 1) * 14;
+  const volScore = clamp(Math.log10(Math.max(vol1, 1)) / 6, 0, 1) * 12;
   score += volScore;
   breakdown.push({ k: 'volume', v: Math.round(volScore), note: `1h $${Math.round(vol1)}` });
 
   const buys = pair.buysH1 || 0;
   const sells = Math.max(pair.sellsH1 || 0, 1);
   const ratio = buys / sells;
-  const flowScore = clamp((ratio - 0.5) / 1.5, 0, 1) * 12;
+  const flowScore = clamp((ratio - 0.5) / 1.5, 0, 1) * 10;
   score += flowScore;
   breakdown.push({ k: 'flow', v: Math.round(flowScore), note: `${ratio.toFixed(2)} buy/sell` });
+
+  // Buy/sell pressure (m5 weighted)
+  const b5 = pair.buysM5 || 0;
+  const s5 = Math.max(pair.sellsM5 || 0, 1);
+  const pressure = b5 / s5;
+  let pressurePts = clamp((pressure - 0.6) / 1.8, 0, 1) * 10;
+  if (pressure < 0.5) pressurePts = 0;
+  score += pressurePts;
+  breakdown.push({ k: 'pressure', v: Math.round(pressurePts), note: `5m ${pressure.toFixed(2)}x` });
+
+  const bpm = buyersPerMinute(pair);
+  let buyerPts = 0;
+  if (bpm >= 8) buyerPts = 10;
+  else if (bpm >= 3) buyerPts = 7;
+  else if (bpm >= 1) buyerPts = 4;
+  else buyerPts = 1;
+  score += buyerPts;
+  breakdown.push({ k: 'buyers', v: buyerPts, note: `${bpm.toFixed(1)}/min` });
 
   const ageH = pair.ageMs != null ? pair.ageMs / 3600000 : 24;
   let ageScore = 8;
   if (ageH < 0.05) ageScore = 2;
   else if (ageH < 0.25) ageScore = 10;
-  else if (ageH < 6) ageScore = 16;
-  else if (ageH < 24) ageScore = 12;
-  else if (ageH < 72) ageScore = 8;
-  else ageScore = 4;
+  else if (ageH < 6) ageScore = 14;
+  else if (ageH < 24) ageScore = 10;
+  else if (ageH < 72) ageScore = 6;
+  else ageScore = 3;
   score += ageScore;
   breakdown.push({ k: 'age', v: ageScore, note: ageH < 1 ? `${Math.round(ageH * 60)}m` : `${ageH.toFixed(1)}h` });
 
-  // MC / liquidity ratio (healthy ~3-15)
   const mc = pair.marketCap || pair.fdv || 0;
-  let mcScore = 6;
+  let mcScore = 5;
   if (mc > 0 && liq > 0) {
     const r = mc / liq;
-    if (r >= 3 && r <= 12) mcScore = 12;
-    else if (r < 3) mcScore = 7;
-    else if (r < 25) mcScore = 5;
-    else mcScore = 2;
+    if (r >= 3 && r <= 12) mcScore = 10;
+    else if (r < 3) mcScore = 6;
+    else if (r < 25) mcScore = 4;
+    else mcScore = 1;
   }
   score += mcScore;
   breakdown.push({ k: 'mc/liq', v: mcScore, note: mc && liq ? `${(mc / liq).toFixed(1)}x` : 'n/a' });
 
-  // momentum / acceleration
   const ch5 = pair.priceChangeM5 || 0;
   const ch1 = pair.priceChangeH1 || 0;
-  let mom = 5;
-  if (ch5 > 2 && ch5 < 80 && ch1 > 0) mom = 12;
-  else if (ch1 > 5 && ch1 < 150) mom = 9;
+  let mom = 4;
+  if (ch5 > 2 && ch5 < 80 && ch1 > 0) mom = 10;
+  else if (ch1 > 5 && ch1 < 150) mom = 8;
   else if (ch1 < -25) mom = 0;
   score += mom;
   breakdown.push({ k: 'momentum', v: mom, note: `5m ${ch5}% / 1h ${ch1}%` });
 
-  if (pair.graduating || pair.source === 'pump.grad') {
+  if (pair.graduating || pair.source === 'pump.grad' || (pair.source || '').includes('migration')) {
     score += 8;
-    breakdown.push({ k: 'graduation', v: 8, note: 'early grad / near raydium' });
+    breakdown.push({ k: 'graduation', v: 8, note: 'grad / migration' });
   }
 
   const social = await socialVelocity(pair);
-  const socPts = Math.round((social.score / 100) * 10);
+  const socPts = Math.round((social.score / 100) * 8);
   score += socPts;
   breakdown.push({ k: 'social/tx', v: socPts, note: `${social.tx} tx/h` });
 
@@ -79,7 +133,8 @@ async function scorePair(pair, settings) {
   try {
     rug = await rugcheck(pair.mint);
   } catch (_) {}
-  let rugPts = 5;
+
+  let rugPts = 4;
   if (rug && rug.ok) {
     if (rug.rugged) {
       return {
@@ -90,15 +145,17 @@ async function scorePair(pair, settings) {
         blacklistDev: true,
       };
     }
-    if (rug.mintRenounced) rugPts += 4;
-    else rugPts -= 8;
-    if (rug.freezeRenounced) rugPts += 3;
-    else rugPts -= 6;
-    if (rug.topHolderPct > 40) rugPts -= 10;
-    else if (rug.topHolderPct > 25) rugPts -= 5;
+    if (rug.mintRenounced) rugPts += 3;
+    else rugPts -= 7;
+    if (rug.freezeRenounced) rugPts += 2;
+    else rugPts -= 5;
+    if (rug.topHolderPct > 40) rugPts -= 8;
+    else if (rug.topHolderPct > 25) rugPts -= 4;
     else rugPts += 3;
-    if (rug.lpLocked) rugPts += 4;
-    rugPts = clamp(rugPts, -15, 14);
+    if (rug.lpLocked) rugPts += 3;
+    // Dev wallet history proxy: mint authority still set + young = bad
+    if (!rug.mintRenounced && ageH < 6) rugPts -= 3;
+    rugPts = clamp(rugPts, -12, 12);
   }
   score += rugPts;
   breakdown.push({
@@ -109,14 +166,71 @@ async function scorePair(pair, settings) {
       : 'unavailable',
   });
 
-  score = clamp(Math.round(score), 0, 100);
+  // Concentration + sniper/bundled
+  const concPct = (rug && rug.topHolderPct) || 0;
+  let concPts = 6;
+  if (concPct > 50) concPts = 0;
+  else if (concPct > 35) concPts = 2;
+  else if (concPct > 20) concPts = 5;
+  else if (concPct > 0) concPts = 8;
+  score += concPts;
+  breakdown.push({ k: 'concentration', v: concPts, note: `${Math.round(concPct)}% top` });
+
+  const sniper = detectBundledSnipers(rug, ageH);
+  const sniperPts = -sniper.sniperRisk;
+  score += sniperPts;
+  breakdown.push({ k: 'sniper', v: sniperPts, note: sniper.note });
+
+  // Smart money overlap (if holders passed in ctx)
+  let smPts = 0;
+  let smMeta = null;
+  if (smartReg && ctx.holders && ctx.holders.length) {
+    smMeta = smartMoneyOverlap(smartReg, ctx.holders);
+    smPts = smMeta.pts;
+    score += smPts;
+    breakdown.push({
+      k: 'smartMoney',
+      v: smPts,
+      note: smMeta.hits ? `${smMeta.hits} wallets · best ${smMeta.best}` : 'none',
+    });
+  } else {
+    breakdown.push({ k: 'smartMoney', v: 0, note: 'n/a' });
+  }
+
+  // Narrative
+  const narratives = tagCoin(pair);
+  const heat = narrativeHeat(narratives, heatMap);
+  const narrPts = Math.round((heat - 1) * 20);
+  score += clamp(narrPts, 0, 8);
+  breakdown.push({
+    k: 'narrative',
+    v: clamp(narrPts, 0, 8),
+    note: narratives.slice(0, 2).join(',') || 'other',
+  });
+
+  // Apply learned weights
+  let finalScore = score;
+  let finalBreakdown = breakdown;
+  if (weights) {
+    const applied = applyWeights(breakdown, weights);
+    finalScore = applied.score;
+    finalBreakdown = applied.breakdown;
+  }
+
+  finalScore = clamp(Math.round(finalScore), 0, 100);
   return {
-    score,
-    pass: score >= (settings.minScore || 70),
-    breakdown,
+    score: finalScore,
+    pass: finalScore >= (settings.minScore || 70),
+    breakdown: finalBreakdown,
     rug,
     social,
+    sniper,
+    narratives,
+    narrativeHeat: heat,
+    buyersPerMin: bpm,
+    pressure,
+    smartMoney: smMeta,
   };
 }
 
-module.exports = { scorePair };
+module.exports = { scorePair, detectBundledSnipers, buyersPerMinute };

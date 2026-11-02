@@ -158,46 +158,57 @@
   }
 
   const AGENT_META = {
-    scanner: { name: 'Scanner', avatar: 'S', color: '#5b8cff' },
-    analyst: { name: 'Analyst', avatar: 'A', color: '#a78bfa' },
-    executor: { name: 'Executor', avatar: 'E', color: '#39ff8c' },
-    risk: { name: 'Risk', avatar: 'R', color: '#ff9f0a' },
-    whale: { name: 'Whale Watch', avatar: 'W', color: '#22d3ee' },
+    scanner: { name: 'Scanner', color: '#5b8cff' },
+    analyst: { name: 'Analyst', color: '#a78bfa' },
+    executor: { name: 'Executor', color: '#39ff8c' },
+    risk: { name: 'Risk', color: '#ff9f0a' },
+    whale: { name: 'Whale', color: '#22d3ee' },
   };
+
+  /** Original robot mark (not xAI/Grok trademark) — per-agent accent color. */
+  function robotSvg(color) {
+    const c = color || '#a78bfa';
+    return `<svg class="bot" viewBox="0 0 32 32" aria-hidden="true">
+      <g fill="none" stroke="${c}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path class="antenna" d="M16 4v3"/>
+        <circle cx="16" cy="3.2" r="1.4" fill="${c}" stroke="none"/>
+        <rect x="7" y="8" width="18" height="14" rx="5" fill="rgba(20,20,28,0.9)"/>
+        <circle class="eye" cx="12.5" cy="14.5" r="1.7" fill="${c}" stroke="none"/>
+        <circle class="eye r" cx="19.5" cy="14.5" r="1.7" fill="${c}" stroke="none"/>
+        <path d="M12 19h8" opacity=".85"/>
+        <path d="M5 13.5h2M25 13.5h2" opacity=".7"/>
+      </g>
+    </svg>`;
+  }
 
   function agentBody(key, a, s) {
     if (!a) return '—';
     if (key === 'scanner') {
-      const chips = (a.recent || [])
-        .map((c) => `<span class="chip ${c.ok ? 'ok' : 'bad'}">${c.symbol} · ${c.tag}</span>`)
-        .join('');
-      return `<div>Pools ${a.pools || 0}</div><div class="chip-row">${chips}</div>`;
+      const feed = a.wsConnected ? 'WS' : 'DEX';
+      return `<div><strong>${a.pools || 0}</strong> pools · ${feed}</div>
+        <div class="agent-meta">+${a.launches || 0} new · ${a.migrations || 0} grad</div>`;
     }
     if (key === 'analyst') {
-      return `<div>Score <strong>${a.score ?? '—'}</strong> · ${a.symbol || '—'}</div>
-        <div class="agent-meta">passed ${a.passed || 0} / scored ${a.scored || 0}</div>`;
+      const sig = (a.topSignals || []).slice(0, 2).map((x) => x.k).join('·') || '—';
+      return `<div><strong>${a.score ?? '—'}</strong> ${a.symbol || ''}</div>
+        <div class="agent-meta">${a.passed || 0}✓/${a.scored || 0} · ${sig}</div>`;
     }
     if (key === 'executor') {
       const f = a.lastFill;
-      return `<div>${f ? `Last ${f.symbol} · ${money(f.amountUsd)}` : 'Waiting for fill'}</div>
+      return `<div>${f ? `${f.symbol} ${money(f.amountUsd)}` : 'idle'}</div>
         <div class="agent-progress"><i style="width:${a.progress || 0}%"></i></div>
-        <div class="agent-meta">${a.trades || 0} trades · ${a.fillSource || 'paper adapter'}</div>`;
+        <div class="agent-meta">Jito · ${a.lastImpact != null ? a.lastImpact + '%' : '—'} · ${a.lastLatencyMs || '—'}ms</div>`;
     }
     if (key === 'risk') {
       const la = a.lastAction;
-      return `<div>Guarding <strong>${a.guarding || '—'}</strong></div>
-        <div class="agent-meta">${la ? `${la.symbol} ${la.reason} ${pct(la.pnlPct)}` : 'ladder TP · trail · daily loss'}</div>`;
+      const streak = a.lossStreak || (s.stats && s.stats.lossStreak) || 0;
+      return `<div>${a.guarding || '—'} · L${streak}</div>
+        <div class="agent-meta">${la ? `${la.reason} ${la.pnl != null ? money(la.pnl) : ''}` : 'TP·trail·sweep'}${s.solReserve ? ' · $' + Number(s.solReserve).toFixed(0) + ' SOL' : ''}</div>`;
     }
     if (key === 'whale') {
       const alert = a.lastAlert;
-      const prev = (a.holdersPreview || [])[0];
-      const chips = ((prev && prev.holders) || [])
-        .slice(0, 3)
-        .map((h) => `<span class="chip">#${h.rank} ${h.pct != null ? h.pct.toFixed(1) + '%' : shortAddr(h.owner)}</span>`)
-        .join('');
-      return `<div>Watching ${a.watching || 0} pos · drop ≥ ${s?.settings?.whaleDropPct ?? 15}%</div>
-        <div class="chip-row">${chips || '<span class="chip">no holders yet</span>'}</div>
-        <div class="agent-meta">${alert ? alert.detail + ' · ' + (alert.latencyMs || a.latencyMs || '—') + 'ms' : 'polling largest accounts'}</div>`;
+      return `<div>${a.watching || 0} pos · SM ${a.smartHits || 0}</div>
+        <div class="agent-meta">${alert ? (alert.detail || '').slice(0, 42) : (a.entrySignals ? a.entrySignals + ' entries' : 'holders')}</div>`;
     }
     return '';
   }
@@ -207,14 +218,15 @@
     if (!el || !state) return;
     const order = ['scanner', 'analyst', 'executor', 'risk', 'whale'];
     el.innerHTML = order
-      .map((key, i) => {
+      .map((key) => {
         const a = state.agents[key] || {};
         const meta = AGENT_META[key];
         const on = a.status && a.status !== 'idle';
-        const span = large ? '' : key === 'whale' ? ' span2' : '';
-        return `<div class="agent-card${span}" data-agent="${key}">
+        const flash = a.flash === 'profit' ? ' flash-profit' : '';
+        const active = on ? ' active-agent' : '';
+        return `<div class="agent-card${active}${flash}" data-agent="${key}">
           <div class="agent-top">
-            <div class="agent-avatar" style="color:${meta.color}">${meta.avatar}</div>
+            <div class="agent-avatar">${robotSvg(meta.color)}</div>
             <div>
               <div class="agent-name">${meta.name}</div>
               <div class="agent-status ${on ? 'on' : ''}">${a.status || 'idle'}</div>
@@ -224,6 +236,14 @@
         </div>`;
       })
       .join('');
+    // clear one-shot flash flags client-side after paint
+    order.forEach((key) => {
+      if (state.agents[key] && state.agents[key].flash === 'profit') {
+        setTimeout(() => {
+          if (state.agents[key]) state.agents[key].flash = null;
+        }, 1000);
+      }
+    });
   }
 
   function renderActivity(targetId, limit) {
@@ -345,7 +365,7 @@
     drawEquity($('equityChart'), state.equityHistory || []);
     renderAgents('agentsGrid', false);
     renderAgents('agentsFull', true);
-    renderActivity('activityHome', 8);
+    renderActivity('activityHome', 5);
     renderActivity('activityFull', 80);
     renderStats();
     renderAccount();
@@ -538,7 +558,7 @@
         location.reload();
       });
       navigator.serviceWorker
-        .register('/sw.js?v=4')
+        .register('/sw.js?v=5')
         .then((reg) => {
           const ping = () => reg.update().catch(() => {});
           ping();

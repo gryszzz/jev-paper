@@ -21,6 +21,11 @@ const PRESETS = {
     cooldownMs: 10 * 60e3,
     slippage: 0.015,
     preferGraduating: false,
+    lossStreakLimit: 3,
+    lossStreakCooldownMs: 20 * 60e3,
+    maxNarrativePct: 0.4,
+    profitSweepPct: 0.35,
+    profitSweepTrigger: 1.25,
   },
   balanced: {
     id: 'balanced',
@@ -42,6 +47,11 @@ const PRESETS = {
     cooldownMs: 5 * 60e3,
     slippage: 0.02,
     preferGraduating: true,
+    lossStreakLimit: 3,
+    lossStreakCooldownMs: 12 * 60e3,
+    maxNarrativePct: 0.5,
+    profitSweepPct: 0.3,
+    profitSweepTrigger: 1.35,
   },
   aggressive: {
     id: 'aggressive',
@@ -64,6 +74,11 @@ const PRESETS = {
     cooldownMs: 2 * 60e3,
     slippage: 0.03,
     preferGraduating: true,
+    lossStreakLimit: 4,
+    lossStreakCooldownMs: 8 * 60e3,
+    maxNarrativePct: 0.6,
+    profitSweepPct: 0.25,
+    profitSweepTrigger: 1.5,
   },
 };
 
@@ -86,20 +101,41 @@ function applyPreset(settings, presetId) {
     cooldownMs: p.cooldownMs,
     slippage: p.slippage,
     preferGraduating: p.preferGraduating,
+    lossStreakLimit: p.lossStreakLimit,
+    lossStreakCooldownMs: p.lossStreakCooldownMs,
+    maxNarrativePct: p.maxNarrativePct,
+    profitSweepPct: p.profitSweepPct,
+    profitSweepTrigger: p.profitSweepTrigger,
   };
 }
 
-/** Fraction of equity to risk: score-weighted, Kelly-capped */
-function positionSizeFraction(score, settings) {
+/**
+ * Volatility-aware Kelly-capped size.
+ * Higher realized vol (from priceChangeH1 abs / liquidity thinness) → smaller size.
+ */
+function positionSizeFraction(score, settings, opts = {}) {
   const s = Math.max(0, Math.min(100, Number(score) || 0));
-  const edge = (s - 50) / 100; // rough edge proxy
+  const edge = (s - 50) / 100;
   const kelly = Math.max(0, edge * 0.5);
   const capped = Math.min(settings.kellyCap || 0.18, kelly || settings.buyPctMin);
   const base =
     settings.buyPctMin +
     ((s - settings.minScore) / Math.max(1, 100 - settings.minScore)) *
       (settings.buyPctMax - settings.buyPctMin);
-  return Math.max(settings.buyPctMin, Math.min(settings.buyPctMax, Math.max(base, capped * 0.9)));
+  let frac = Math.max(settings.buyPctMin, Math.min(settings.buyPctMax, Math.max(base, capped * 0.9)));
+
+  const vol = Math.abs(Number(opts.priceChangeH1) || 0);
+  const liq = Number(opts.liquidity) || 0;
+  let volFactor = 1;
+  if (vol > 80) volFactor = 0.55;
+  else if (vol > 40) volFactor = 0.7;
+  else if (vol > 20) volFactor = 0.85;
+  if (liq > 0 && liq < 40000) volFactor *= 0.85;
+  frac *= volFactor;
+
+  if (opts.narrativeOverExposed) frac *= 0.5;
+
+  return Math.max(settings.buyPctMin * 0.5, Math.min(settings.buyPctMax, frac));
 }
 
 module.exports = { PRESETS, applyPreset, positionSizeFraction };

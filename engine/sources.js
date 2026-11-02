@@ -1,12 +1,12 @@
 'use strict';
 
 const { fetchJson } = require('./http');
+const { feed } = require('./realtime');
 
 const DS = 'https://api.dexscreener.com';
 const GT = 'https://api.geckoterminal.com/api/v2';
 
 async function pumpNewTokens() {
-  // Frontend-facing pump.fun endpoints (public); may fail — caller handles.
   const urls = [
     'https://frontend-api.pump.fun/coins/latest?limit=30',
     'https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=false',
@@ -56,6 +56,25 @@ async function pumpGraduating() {
     } catch (_) {}
   }
   return [];
+}
+
+/** Merge PumpPortal realtime buffer with REST fallbacks. */
+function realtimeLaunches() {
+  return feed.drainLaunches({ max: 50 }).map((r) => ({
+    mint: r.mint,
+    symbol: r.symbol,
+    name: r.name,
+    icon: r.icon,
+    marketCap: r.marketCap,
+    creator: r.creator,
+    graduating: !!r.graduating,
+    source: r.source,
+    ts: r.ts,
+  }));
+}
+
+function realtimeStats() {
+  return feed.stats();
 }
 
 async function dexscreenerDiscover() {
@@ -134,15 +153,22 @@ async function rugcheck(mint) {
     const mintAuth = d.tokenMeta && d.tokenMeta.mintAuthority;
     const freezeAuth = d.tokenMeta && d.tokenMeta.freezeAuthority;
     const lpLocked = !!(d.markets || []).some((m) => m.lp && (m.lp.lpLockedPct || 0) > 80);
+    const creator = d.creator || (d.topHolders && d.topHolders[0] && d.topHolders[0].owner) || null;
     return {
       ok: true,
       score,
       topHolderPct: topPct,
+      topHoldersDetail: top.map((h) => ({
+        owner: h.owner || h.address,
+        pct: Number(h.pct) || 0,
+        uiAmount: h.uiAmount,
+      })),
       mintAuthority: mintAuth || null,
       freezeAuthority: freezeAuth || null,
       mintRenounced: !mintAuth,
       freezeRenounced: !freezeAuth,
       lpLocked,
+      creator,
       risks: risks.map((r) => r.name || r).slice(0, 8),
       rugged: score < 1 || risks.some((r) => /rug|honeypot/i.test(String(r.name || r))),
     };
@@ -151,9 +177,7 @@ async function rugcheck(mint) {
   }
 }
 
-/** Lightweight public "smart money" proxy: DexScreener boost + high tx velocity tags */
 async function socialVelocity(pair) {
-  // No paid X API — approximate via DexScreener social links + boost presence + tx count.
   const buys = pair.buysH1 || 0;
   const sells = pair.sellsH1 || 1;
   const tx = buys + sells;
@@ -173,6 +197,8 @@ async function socialVelocity(pair) {
 module.exports = {
   pumpNewTokens,
   pumpGraduating,
+  realtimeLaunches,
+  realtimeStats,
   dexscreenerDiscover,
   geckoNewPools,
   rugcheck,

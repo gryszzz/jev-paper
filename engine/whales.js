@@ -160,3 +160,47 @@ function detectSells(prevHolders, nextHolders, { dropPct = 15, supply } = {}) {
 }
 
 module.exports = { getTopHolders, getTokenSupply, detectSells, RPC };
+
+/**
+ * Detect buys: new top holders or balance increases above threshold.
+ */
+function detectBuys(prevHolders, nextHolders, { risePct = 20, supply } = {}) {
+  const prevMap = new Map((prevHolders || []).map((h) => [h.owner, h]));
+  const events = [];
+  for (const h of nextHolders || []) {
+    const prev = prevMap.get(h.owner);
+    if (!prev) {
+      if ((h.pct || 0) >= 0.5 || (supply > 0 && h.amount / supply >= 0.005)) {
+        events.push({
+          owner: h.owner,
+          rank: h.rank,
+          prevAmount: 0,
+          amount: h.amount,
+          boughtAmount: h.amount,
+          boughtPctOfSupply: supply > 0 ? (h.amount / supply) * 100 : 0,
+          pctHeld: h.pct,
+          newEntrant: true,
+        });
+      }
+      continue;
+    }
+    if (!(prev.amount >= 0)) continue;
+    const rise = h.amount - prev.amount;
+    if (rise <= 0) continue;
+    const riseOfPos = prev.amount > 0 ? (rise / prev.amount) * 100 : 100;
+    if (riseOfPos >= risePct) {
+      events.push({
+        owner: h.owner,
+        rank: h.rank,
+        prevAmount: prev.amount,
+        amount: h.amount,
+        boughtAmount: rise,
+        boughtPctOfPos: riseOfPos,
+        pctHeld: h.pct,
+      });
+    }
+  }
+  return events;
+}
+
+module.exports.detectBuys = detectBuys;

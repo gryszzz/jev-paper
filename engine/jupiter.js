@@ -7,11 +7,12 @@ const USDC = 'EPjFWdd5AufqSSSqEM2QN1xzybapC8g4wEGGkZwyTDt1';
 // Prefer SOL route for memecoins; fall back to USDC notionally via price.
 const JUP = 'https://quote-api.jup.ag/v6/quote';
 
-async function jupiterQuote({ mint, side, amountUsd, tokenAmount, markPrice }) {
+async function jupiterQuote({ mint, side, amountUsd, tokenAmount, markPrice, slippageBps }) {
+  const slip = Math.max(50, Math.min(1500, Number(slippageBps) || 100));
   // Approximate input atoms: use USDC 6 decimals as USD proxy for buy size.
   if (side === 'buy') {
     const amount = Math.max(1, Math.round(Number(amountUsd) * 1e6));
-    const url = `${JUP}?inputMint=${USDC}&outputMint=${mint}&amount=${amount}&slippageBps=100&onlyDirectRoutes=false`;
+    const url = `${JUP}?inputMint=${USDC}&outputMint=${mint}&amount=${amount}&slippageBps=${slip}&onlyDirectRoutes=false`;
     const d = await fetchJson(url, { ttlMs: 5000, key: `jup-buy-${mint}-${amount}` });
     const out = Number(d.outAmount) || 0;
     // unknown decimals — assume 6 for pump tokens when missing
@@ -32,7 +33,7 @@ async function jupiterQuote({ mint, side, amountUsd, tokenAmount, markPrice }) {
   // sell: tokenAmount in UI units → atoms
   const decimals = 6;
   const atoms = Math.max(1, Math.round(Number(tokenAmount) * 10 ** decimals));
-  const url = `${JUP}?inputMint=${mint}&outputMint=${USDC}&amount=${atoms}&slippageBps=150&onlyDirectRoutes=false`;
+  const url = `${JUP}?inputMint=${mint}&outputMint=${USDC}&amount=${atoms}&slippageBps=${Math.max(slip, 150)}&onlyDirectRoutes=false`;
   const d = await fetchJson(url, { ttlMs: 5000, key: `jup-sell-${mint}-${atoms}` });
   const out = Number(d.outAmount) || 0;
   const outUi = out / 1e6;

@@ -7,19 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="JEV — Solana memecoin paper-trading agents. Mode: PAPER. No real money." />
-  <link rel="manifest" href="/manifest.json?v=4" />
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=4" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=4" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=4" />
+  <link rel="manifest" href="/manifest.json?v=5" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=5" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=5" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=5" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <title>JEV Paper</title>
-  <link rel="stylesheet" href="/styles.css?v=4" />
+  <link rel="stylesheet" href="/styles.css?v=5" />
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hide">
-    <img src="/img/j-logo.svg?v=4" alt="JEV" class="lock-logo" />
+    <img src="/img/j-logo.svg?v=5" alt="JEV" class="lock-logo" />
     <h1>JEV</h1>
     <p>Enter passcode to control agents</p>
     <input id="passInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Passcode" />
@@ -29,7 +29,7 @@
 
   <div id="app">
     <header class="top-banner" id="banner">
-      <img src="/img/j-mark.svg?v=4" class="banner-mark" alt="" />
+      <img src="/img/j-mark.svg?v=5" class="banner-mark" alt="" />
       <img id="bannerIcon" class="banner-icon hide" alt="" />
       <span id="bannerText">JEV · Mode: PAPER</span>
       <span class="mode-badge" id="modeBadge">Mode: PAPER</span>
@@ -64,7 +64,7 @@
 
       <section class="section-head">
         <h2>Agents</h2>
-        <span class="pill-green" id="agentsRunning">5 agents</span>
+        <span class="pill-green" id="agentsRunning">5</span>
       </section>
       <div class="agents-grid" id="agentsGrid"></div>
 
@@ -148,7 +148,7 @@
         <button class="btn-muted" id="clearKillBtn" type="button">Clear kill switch</button>
         <button class="btn-danger" id="resetBtn" type="button">Reset paper wallet</button>
       </div>
-      <p class="disclaimer">No wallet keys in the client. LIVE_ENABLED=false. LiveAdapter is a stub. DexScreener + pump.fun + RugCheck + Jupiter quotes + Solana RPC holders. Install: Share → Add to Home Screen.</p>
+      <p class="disclaimer">No wallet keys. LIVE_ENABLED=false. PumpPortal WS + DexScreener · Jito-sim fills · smart-money whales · HELIUS_API_KEY optional. Install: Share → Add to Home Screen.</p>
     </main>
 
     <div id="coinSheet" class="sheet" aria-hidden="true">
@@ -197,6 +197,6 @@
       </button>
     </nav>
   </div>
-  <script src="/app.js?v=4"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>

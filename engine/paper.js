@@ -10,10 +10,23 @@ const {
   dexscreenerDiscover,
   geckoNewPools,
   rugcheck,
+  realtimeLaunches,
+  realtimeStats,
 } = require('./sources');
 const { scorePair } = require('./analyst');
 const { PRESETS, applyPreset, positionSizeFraction } = require('./strategies');
-const { getTopHolders, getTokenSupply, detectSells } = require('./whales');
+const { getTopHolders, getTokenSupply, detectSells, detectBuys } = require('./whales');
+const { feed } = require('./realtime');
+const { ensureWeights, recordClosedTrade, topWeights } = require('./feedback');
+const {
+  ensureRegistry,
+  recordWalletEvent,
+  isSmartWallet,
+  pushSignal,
+  topAddresses,
+  smartMoneyOverlap,
+} = require('./smartMoney');
+const { tagCoin, updateHeatMap, exposureByNarrative } = require('./narratives');
 
 const DS = 'https://api.dexscreener.com';
 
@@ -41,6 +54,11 @@ const DEFAULTS = {
   whalePollMs: 20000,
   scanIntervalMs: 22000,
   priceIntervalMs: 8000,
+  lossStreakLimit: 3,
+  lossStreakCooldownMs: 12 * 60e3,
+  maxNarrativePct: 0.5,
+  profitSweepPct: 0.3,
+  profitSweepTrigger: 1.35, // equity / starting
   // Live safety caps (enforced even if LIVE_ENABLED flipped — LiveAdapter still stubs)
   liveMaxPerTradeUsd: 25,
   liveMaxDailySpendUsd: 100,
@@ -60,6 +78,9 @@ function clamp(n, a, b) {
 function round(n, d = 2) {
   const p = 10 ** d;
   return Math.round((Number(n) || 0) * p) / p;
+}
+function short(a) {
+  return a ? `${String(a).slice(0, 4)}…${String(a).slice(-4)}` : '—';
 }
 
 const MAJORS = new Set(
@@ -135,8 +156,13 @@ function emptyStats() {
     bestTrade: 0,
     worstTrade: 0,
     whaleExits: 0,
+    whaleEntries: 0,
     avgWhaleLatencyMs: 0,
     _whaleLatencySum: 0,
+    lossStreak: 0,
+    winStreak: 0,
+    sweeps: 0,
+    sweptUsd: 0,
     byStrategy: {},
   };
 }
@@ -178,6 +204,11 @@ function emptyState(settings = {}) {
       preferGraduating: merged.preferGraduating,
       whaleDropPct: merged.whaleDropPct ?? DEFAULTS.whaleDropPct,
       whalePollMs: merged.whalePollMs ?? DEFAULTS.whalePollMs,
+      lossStreakLimit: merged.lossStreakLimit ?? DEFAULTS.lossStreakLimit,
+      lossStreakCooldownMs: merged.lossStreakCooldownMs ?? DEFAULTS.lossStreakCooldownMs,
+      maxNarrativePct: merged.maxNarrativePct ?? DEFAULTS.maxNarrativePct,
+      profitSweepPct: merged.profitSweepPct ?? DEFAULTS.profitSweepPct,
+      profitSweepTrigger: merged.profitSweepTrigger ?? DEFAULTS.profitSweepTrigger,
       liveMaxPerTradeUsd: DEFAULTS.liveMaxPerTradeUsd,
       liveMaxDailySpendUsd: DEFAULTS.liveMaxDailySpendUsd,
       liveMaxDailyLossUsd: DEFAULTS.liveMaxDailyLossUsd,
@@ -195,10 +226,51 @@ function emptyState(settings = {}) {
     stats: emptyStats(),
     banner: { text: 'JEV paper · Mode: PAPER', icon: null, ts: now() },
     agents: {
-      scanner: { status: 'idle', pools: 0, recent: [], lastRun: 0 },
-      analyst: { status: 'idle', score: null, symbol: null, passed: 0, scored: 0, lastRun: 0 },
-      executor: { status: 'idle', trades: 0, lastFill: null, progress: 0, lastRun: 0 },
-      risk: { status: 'idle', guarding: null, lastAction: null, lastRun: 0 },
+      scanner: {
+        status: 'idle',
+        pools: 0,
+        recent: [],
+        lastRun: 0,
+        feed: 'dex',
+        wsConnected: false,
+        launches: 0,
+        migrations: 0,
+        flash: null,
+      },
+      analyst: {
+        status: 'idle',
+        score: null,
+        symbol: null,
+        passed: 0,
+        scored: 0,
+        lastRun: 0,
+        topSignals: [],
+        weights: [],
+        flash: null,
+      },
+      executor: {
+        status: 'idle',
+        trades: 0,
+        lastFill: null,
+        progress: 0,
+        lastRun: 0,
+        fillSource: null,
+        lastImpact: null,
+        lastLatencyMs: null,
+        jito: true,
+        flash: null,
+      },
+      risk: {
+        status: 'idle',
+        guarding: null,
+        lastAction: null,
+        lastRun: 0,
+        lossStreak: 0,
+        cooldownUntil: 0,
+        narrativeExposure: {},
+        sweptUsd: 0,
+        flash: null,
+      },
       whale: {
         status: 'idle',
         watching: 0,
@@ -206,8 +278,13 @@ function emptyState(settings = {}) {
         lastRun: 0,
         latencyMs: null,
         holdersPreview: [],
+        smartHits: 0,
+        entrySignals: 0,
+        flash: null,
       },
     },
+    heatMap: {},
+    solReserve: 0, // profit sweep bucket (paper SOL)
     notifications: [],
   };
 }
@@ -216,23 +293,25 @@ function migrateState(raw) {
   if (!raw) return emptyState();
   if (raw.version === 2) {
     raw.agents = raw.agents || {};
-    if (!raw.agents.whale) {
-      raw.agents.whale = {
-        status: 'idle',
-        watching: 0,
-        lastAlert: null,
-        lastRun: 0,
-        latencyMs: null,
-        holdersPreview: [],
-      };
+    const empty = emptyState();
+    for (const k of Object.keys(empty.agents)) {
+      raw.agents[k] = { ...empty.agents[k], ...(raw.agents[k] || {}) };
     }
     raw.whaleWatch = raw.whaleWatch || {};
-    raw.stats = raw.stats || emptyStats();
+    raw.stats = { ...emptyStats(), ...(raw.stats || {}) };
     raw.ruggedDevs = raw.ruggedDevs || [];
     raw.killSwitch = !!raw.killSwitch;
     raw.mode = 'paper';
     raw.liveEnabled = false;
-    raw.settings = { ...DEFAULTS, ...raw.settings, takeProfitLadder: raw.settings.takeProfitLadder || DEFAULTS.takeProfitLadder };
+    raw.heatMap = raw.heatMap || {};
+    raw.solReserve = raw.solReserve || 0;
+    ensureWeights(raw);
+    ensureRegistry(raw);
+    raw.settings = {
+      ...DEFAULTS,
+      ...raw.settings,
+      takeProfitLadder: (raw.settings && raw.settings.takeProfitLadder) || DEFAULTS.takeProfitLadder,
+    };
     return raw;
   }
   // v1 → v2
@@ -301,6 +380,7 @@ class PaperEngine {
       jupiterQuote: (args) => jupiterQuote(args),
       fallbackSlippage: DEFAULTS.slippage,
     });
+    this._tradeUnsub = null;
   }
 
   async _init() {
@@ -308,6 +388,8 @@ class PaperEngine {
     this.state = migrateState(raw);
     this.state.mode = 'paper';
     this.state.liveEnabled = false;
+    ensureWeights(this.state);
+    ensureRegistry(this.state);
     if (process.env.LIVE_ENABLED === 'true') {
       console.warn('[jev] LIVE_ENABLED=true ignored — paper only until LiveAdapter is completed');
     }
@@ -381,8 +463,13 @@ class PaperEngine {
       cooldownUntil: s.cooldownUntil || 0,
       presets: Object.keys(PRESETS).map((id) => ({ id, label: PRESETS[id].label })),
       adapterMode: this.adapter.mode(),
+      solReserve: round(s.solReserve || 0, 4),
+      heatMap: s.heatMap || {},
+      signalWeights: topWeights(s.signalWeights, 6),
+      smartMoneyTop: (ensureRegistry(s).wallets || []).slice().sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),
+      realtime: realtimeStats(),
       disclaimer:
-        'PAPER ONLY — Mode: PAPER. No real trades, no wallet keys on client. LIVE_ENABLED=false. Jupiter quotes inform paper fills. Whale Watch uses public RPC holder polls.',
+        'PAPER ONLY — Mode: PAPER. PumpPortal WS + DexScreener fallback. Jito-sim fills. Whale Watch RPC + smart-money. LIVE_ENABLED=false. Optional HELIUS_API_KEY for faster RPC.',
     };
   }
 
@@ -390,6 +477,20 @@ class PaperEngine {
     this._ready.then(() => {
       if (this._scanTimer) return;
       console.log('[jev] paper engine starting · adapter=', this.adapter.mode());
+      try {
+        feed.start();
+        // Prefer Helius RPC when key present
+        const hUrl = feed.heliusRpcUrl();
+        if (hUrl) {
+          process.env.SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || hUrl;
+          console.log('[jev] HELIUS_API_KEY detected — using Helius RPC');
+        }
+        const reg = ensureRegistry(this.state);
+        feed.watchAccountTrades(topAddresses(reg, 15));
+        this._tradeUnsub = feed.onTrade((msg) => this._onRealtimeTrade(msg));
+      } catch (e) {
+        console.warn('[jev] realtime feed', e.message);
+      }
       this.tickScan().catch((e) => console.error('scan', e.message));
       this.tickPrices().catch((e) => console.error('prices', e.message));
       this.tickWhales().catch((e) => console.error('whales', e.message));
@@ -411,6 +512,70 @@ class PaperEngine {
     if (this._priceTimer) clearInterval(this._priceTimer);
     if (this._whaleTimer) clearInterval(this._whaleTimer);
     this._scanTimer = this._priceTimer = this._whaleTimer = null;
+    try {
+      if (this._tradeUnsub) this._tradeUnsub();
+      feed.stop();
+    } catch (_) {}
+  }
+
+  _onRealtimeTrade(msg) {
+    const state = this.state;
+    if (!state) return;
+    const mint = msg.mint || msg.token;
+    const wallet = msg.traderPublicKey || msg.owner || msg.account;
+    const side = (msg.txType || msg.side || '').toLowerCase();
+    if (!mint || !wallet) return;
+    const reg = ensureRegistry(state);
+    const smart = isSmartWallet(reg, wallet);
+    const pos = state.positions.find((p) => p.mint === mint);
+    if (smart && (side === 'sell' || side === 'sells') && pos && state.settings.running && !state.killSwitch) {
+      const detail = `Smart-money sell · ${smart.label || 'wallet'} via WS`;
+      state.agents.whale.lastAlert = { symbol: pos.symbol, detail, latencyMs: 50, ts: now(), owner: wallet };
+      state.agents.whale.flash = 'alert';
+      state.agents.whale.latencyMs = 50;
+      pushSignal(reg, { type: 'sell', mint, wallet, symbol: pos.symbol });
+      this.paperSell(pos, 'whale', detail, 1).catch(() => {});
+    }
+    if (smart && (side === 'buy' || side === 'buys') && !smart.skipEntry) {
+      pushSignal(reg, { type: 'buy', mint, wallet, symbol: msg.symbol });
+      state.agents.whale.entrySignals = (state.agents.whale.entrySignals || 0) + 1;
+      state.agents.whale.flash = 'entry';
+      recordWalletEvent(reg, wallet, { side: 'buy' });
+      // Mark mint as smart-entry candidate for next scan
+      state._smartEntryMints = state._smartEntryMints || {};
+      state._smartEntryMints[mint] = { wallet, score: smart.score, ts: now() };
+    }
+  }
+
+  maybeProfitSweep() {
+    const state = this.state;
+    const settings = state.settings;
+    const eq = equity(state);
+    const trigger = settings.profitSweepTrigger || 1.35;
+    const start = state.startingBalance || 100;
+    if (eq < start * trigger) return;
+    if (state.cash < 10) return;
+    const pct = settings.profitSweepPct || 0.3;
+    // Sweep a slice of free cash into paper SOL reserve (locks gains)
+    const sweep = round(state.cash * pct, 4);
+    if (sweep < 2) return;
+    state.cash = round(state.cash - sweep, 4);
+    state.solReserve = round((state.solReserve || 0) + sweep, 4);
+    state.stats.sweeps = (state.stats.sweeps || 0) + 1;
+    state.stats.sweptUsd = round((state.stats.sweptUsd || 0) + sweep, 4);
+    state.agents.risk.sweptUsd = state.stats.sweptUsd;
+    state.agents.risk.flash = 'profit';
+    state.agents.risk.lastAction = { symbol: 'SOL', reason: 'sweep', pnl: sweep, pnlPct: 0 };
+    addActivity(state, {
+      type: 'sweep',
+      symbol: 'SOL',
+      agent: 'Risk',
+      detail: `Profit sweep ${round(pct * 100, 0)}% → reserve`,
+      amountUsd: sweep,
+      pnl: sweep,
+      pnlPct: 0,
+    });
+    setBanner(state, `Swept $${sweep.toFixed(2)} to SOL reserve · Mode: PAPER`, null);
   }
 
   setRunning(running) {
@@ -477,12 +642,18 @@ class PaperEngine {
         cooldownMs: next.cooldownMs,
         slippage: next.slippage,
         preferGraduating: next.preferGraduating,
+        lossStreakLimit: next.lossStreakLimit,
+        lossStreakCooldownMs: next.lossStreakCooldownMs,
+        maxNarrativePct: next.maxNarrativePct,
+        profitSweepPct: next.profitSweepPct,
+        profitSweepTrigger: next.profitSweepTrigger,
       });
     }
     const keys = [
       'minLiquidity', 'buyPctMin', 'buyPctMax', 'maxPositions', 'stopPct', 'trailPct',
       'slippage', 'minScore', 'running', 'kellyCap', 'maxDailyLossPct', 'cooldownMs',
       'whaleDropPct', 'whalePollMs', 'preferGraduating',
+      'lossStreakLimit', 'lossStreakCooldownMs', 'maxNarrativePct', 'profitSweepPct', 'profitSweepTrigger',
       'liveMaxPerTradeUsd', 'liveMaxDailySpendUsd', 'liveMaxDailyLossUsd', 'liveWalletBalanceCapUsd',
     ];
     for (const k of keys) {
@@ -552,6 +723,13 @@ class PaperEngine {
       state.agents.scanner.lastRun = now();
       this.emit();
 
+      const rt = realtimeLaunches();
+      const rtStats = realtimeStats();
+      state.agents.scanner.wsConnected = !!rtStats.connected;
+      state.agents.scanner.launches = rtStats.launches || 0;
+      state.agents.scanner.migrations = rtStats.migrations || 0;
+      state.agents.scanner.feed = rtStats.connected ? 'pumpportal+dex' : 'dex-fallback';
+
       const [ds, pumpNew, pumpGrad, gecko] = await Promise.all([
         dexscreenerDiscover().catch(() => ({ mints: [], icons: new Map(), meta: new Map() })),
         pumpNewTokens().catch(() => []),
@@ -562,6 +740,15 @@ class PaperEngine {
       const mintSet = new Set(ds.mints || []);
       const icons = ds.icons || new Map();
       const graduating = new Set();
+      const creators = new Map();
+      for (const r of rt) {
+        if (r.mint) {
+          mintSet.add(r.mint);
+          if (r.graduating) graduating.add(r.mint);
+          if (r.creator) creators.set(r.mint, r.creator);
+          if (r.symbol && r.icon) icons.set(r.mint, r.icon);
+        }
+      }
       for (const p of pumpNew) if (p.mint) mintSet.add(p.mint);
       for (const p of pumpGrad) {
         if (p.mint) {
@@ -570,6 +757,8 @@ class PaperEngine {
         }
       }
       for (const g of gecko) if (g.mint) mintSet.add(g.mint);
+      // Boost smart-money entry mints
+      for (const m of Object.keys(state._smartEntryMints || {})) mintSet.add(m);
 
       const mints = [...mintSet].slice(0, 80);
       const pairs = await this.fetchPairsForMints(mints);
@@ -613,7 +802,9 @@ class PaperEngine {
       }));
       state.agents.scanner.recent = [...rejects.slice(0, 2), ...goods].slice(0, 5);
       state.scanned = filtered.slice(0, 20);
-      state.agents.scanner.status = 'idle';
+      state.heatMap = updateHeatMap(filtered.slice(0, 40));
+      state.agents.scanner.status = rtStats.connected ? 'streaming' : 'idle';
+      if (rt.length) state.agents.scanner.flash = 'pulse';
 
       if (!settings.running || state.killSwitch) {
         this.persist();
@@ -638,39 +829,82 @@ class PaperEngine {
 
       state.agents.analyst.status = 'scoring';
       this.emit();
+      const reg = ensureRegistry(state);
+      const narrExp = exposureByNarrative(state.positions);
+      state.agents.risk.narrativeExposure = narrExp;
       const scored = [];
       for (const p of filtered.slice(0, 18)) {
-        const r = await scorePair(p, settings);
+        let holders = [];
+        try {
+          // light holder peek for smart-money overlap on top candidates only
+          if (scored.length < 6) {
+            holders = await getTopHolders(p.mint, { limit: 8 });
+          }
+        } catch (_) {}
+        const r = await scorePair(p, settings, {
+          state,
+          heatMap: state.heatMap,
+          smartMoney: reg,
+          holders,
+        });
         if (r.blacklistDev && p.mint) {
           if (!state.ruggedDevs.includes(p.mint)) state.ruggedDevs.push(p.mint);
         }
-        scored.push({ ...p, ...r });
+        // Smart-money entry boost
+        const se = state._smartEntryMints && state._smartEntryMints[p.mint];
+        if (se && now() - se.ts < 15 * 60e3) {
+          r.score = Math.min(100, r.score + 8);
+          r.breakdown = [...(r.breakdown || []), { k: 'smartMoney', v: 8, note: 'WS buy signal' }];
+          r.pass = r.score >= (settings.minScore || 70);
+        }
+        scored.push({ ...p, ...r, narratives: r.narratives || tagCoin(p) });
       }
       scored.sort((a, b) => b.score - a.score);
       state.scored = scored.slice(0, 15);
       state.agents.analyst.scored = (state.agents.analyst.scored || 0) + scored.length;
       state.agents.analyst.lastRun = now();
+      state.agents.analyst.weights = topWeights(state.signalWeights, 4);
       const top = scored[0];
       if (top) {
         state.agents.analyst.score = top.score;
         state.agents.analyst.symbol = top.symbol;
+        state.agents.analyst.topSignals = (top.breakdown || []).slice().sort((a,b)=>b.v-a.v).slice(0,3);
         state.agents.analyst.status = top.pass ? 'passed' : 'scoring';
+        state.agents.analyst.flash = top.pass ? 'pulse' : null;
       } else {
         state.agents.analyst.status = 'idle';
       }
 
       const openMints = new Set(state.positions.map((p) => p.mint));
-      const candidates = scored.filter(
-        (p) => p.pass && !openMints.has(p.mint) && !state.seenMints.includes(p.mint)
-      );
+      const eqNow = equity(state);
+      const candidates = scored.filter((p) => {
+        if (!p.pass || openMints.has(p.mint) || state.seenMints.includes(p.mint)) return false;
+        // per-narrative exposure cap
+        const tags = p.narratives || tagCoin(p);
+        const maxNarr = settings.maxNarrativePct || 0.5;
+        for (const t of tags) {
+          const exp = (narrExp[t] || 0) / Math.max(eqNow, 1);
+          if (exp >= maxNarr) {
+            p.narrativeOverExposed = true;
+            return false;
+          }
+        }
+        return true;
+      });
 
-      if (candidates.length && state.positions.length < settings.maxPositions && state.cash > 5) {
+      // loss-streak cooldown already handled above; also block if streak cooldown
+      if (state.stats.lossStreak >= (settings.lossStreakLimit || 3) && state.cooldownUntil > now()) {
+        state.agents.risk.status = 'cooldown';
+        state.agents.risk.lossStreak = state.stats.lossStreak;
+      } else if (candidates.length && state.positions.length < settings.maxPositions && state.cash > 5) {
         const pick = candidates[0];
         state.agents.analyst.passed = (state.agents.analyst.passed || 0) + 1;
         await this.paperBuy(pick);
       } else {
         state.agents.analyst.status = top ? (top.pass ? 'passed' : 'idle') : 'idle';
       }
+
+      this.maybeProfitSweep();
 
       pushEquity(state);
       this.persist();
@@ -687,8 +921,18 @@ class PaperEngine {
     if (state.positions.length >= settings.maxPositions) return null;
     if (!pair.priceUsd || pair.priceUsd <= 0) return null;
 
-    const frac = positionSizeFraction(pair.score, settings);
+    const narrExp = exposureByNarrative(state.positions);
+    const tags = pair.narratives || tagCoin(pair);
     const eq = equity(state);
+    let over = false;
+    for (const t of tags) {
+      if ((narrExp[t] || 0) / Math.max(eq, 1) >= (settings.maxNarrativePct || 0.5) * 0.85) over = true;
+    }
+    const frac = positionSizeFraction(pair.score, settings, {
+      priceChangeH1: pair.priceChangeH1,
+      liquidity: pair.liquidity,
+      narrativeOverExposed: over,
+    });
     let spend = round(eq * frac, 2);
     spend = Math.min(spend, round(state.cash * 0.95, 2));
     // Paper still respects live caps as soft training rails
@@ -697,6 +941,7 @@ class PaperEngine {
 
     state.agents.executor.status = 'buying';
     state.agents.executor.progress = 0;
+    state.agents.executor.jito = true;
     state.agents.executor.lastFill = {
       symbol: pair.symbol,
       amountUsd: spend,
@@ -705,16 +950,21 @@ class PaperEngine {
     };
     this.emit();
     for (const step of [30, 65, 100]) {
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 80));
       state.agents.executor.progress = step;
       this.emit();
     }
 
-    const fill = await this.adapter.buy(pair.mint, spend, { markPrice: pair.priceUsd });
+    const fill = await this.adapter.buy(pair.mint, spend, {
+      markPrice: pair.priceUsd,
+      liquidity: pair.liquidity,
+      baseSlippage: settings.slippage,
+      urgency: pair.graduating ? 'high' : 'normal',
+    });
     const fillPrice = fill.fillPrice || pair.priceUsd * (1 + settings.slippage);
     const tokens = fill.tokens || spend / fillPrice;
     const feeUsd = round((fill.priorityFeeSol || 0) * (pair.solPriceUsd || 150) + spend * 0.0025, 4);
-    const netSpend = round(spend + feeUsd * 0.1, 4); // small fee drag on cash
+    const netSpend = round(spend + feeUsd, 4); // full priority fee drag
     const stopPrice = fillPrice * (1 + settings.stopPct);
     const ladder = (settings.takeProfitLadder || []).map((r) => ({
       ...r,
@@ -755,6 +1005,11 @@ class PaperEngine {
       graduating: !!pair.graduating,
       fillSource: fill.source || 'paper',
       impactPct: fill.impactPct || 0,
+      latencyMs: fill.latencyMs || 0,
+      priorityFeeSol: fill.priorityFeeSol || 0,
+      jito: !!fill.jito,
+      dynSlippage: fill.dynSlippage || null,
+      narratives: tags,
       strategyId: settings.strategyId,
       priceHistory: [{ t: now(), price: pair.priceUsd }],
       whaleMeta: { lastPoll: 0, alerted: false },
@@ -770,16 +1025,24 @@ class PaperEngine {
     state.agents.executor.status = 'filled';
     state.agents.executor.progress = 100;
     state.agents.executor.lastRun = now();
+    state.agents.executor.fillSource = fill.source || 'jito-sim';
+    state.agents.executor.lastImpact = round(fill.impactPct || 0, 2);
+    state.agents.executor.lastLatencyMs = fill.latencyMs || 0;
+    state.agents.executor.flash = 'pulse';
     state.agents.risk.status = 'guarding';
     state.agents.risk.guarding = pair.symbol;
     state.stats.trades = (state.stats.trades || 0) + 1;
+    // watch mint trades on WS when keyed
+    try {
+      feed.watchTokenTrades([pair.mint]);
+    } catch (_) {}
 
     addActivity(state, {
       type: 'buy',
       symbol: pair.symbol,
       icon: pair.icon,
       agent: 'Executor',
-      detail: `${round(frac * 100, 0)}% · ${fill.source || 'paper'} · impact ${round(fill.impactPct || 0, 2)}%`,
+      detail: `${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'} · slip ${round(fill.impactPct || 0, 2)}% · ${fill.latencyMs || 0}ms`,
       amountUsd: spend,
       pnl: null,
       pnlPct: null,
@@ -910,15 +1173,31 @@ class PaperEngine {
     const tokensToSell = pos.tokens * pct;
     if (tokensToSell <= 0) return null;
 
-    const fill = await this.adapter.sell(pos.mint, tokensToSell, { markPrice: pos.markPrice || pos.entryPrice });
+    const urgency =
+      reason === 'whale' || reason === 'stop' ? 'high' : reason === 'trail' ? 'normal' : 'normal';
+    const fill = await this.adapter.sell(pos.mint, tokensToSell, {
+      markPrice: pos.markPrice || pos.entryPrice,
+      liquidity: pos.liquidity,
+      baseSlippage: state.settings.slippage,
+      urgency,
+      reason,
+    });
     const fillPrice = fill.fillPrice || (pos.markPrice || pos.entryPrice) * (1 - state.settings.slippage);
     const proceeds = round(fill.proceedsUsd != null ? fill.proceedsUsd : tokensToSell * fillPrice, 4);
+    const feeDrag = round((fill.priorityFeeSol || 0) * 150, 4);
     const basis = round(pos.remainingUsdBasis * pct, 4);
-    const pnl = round(proceeds - basis, 4);
+    const pnl = round(proceeds - basis - feeDrag * 0.25, 4);
     const pnlPct = basis > 0 ? round((pnl / basis) * 100, 2) : 0;
 
-    state.cash = round(state.cash + proceeds, 4);
+    state.cash = round(state.cash + proceeds - feeDrag * 0.25, 4);
     state.dayRealizedPnl = round((state.dayRealizedPnl || 0) + pnl, 4);
+    state.agents.executor.lastImpact = round(fill.impactPct || 0, 2);
+    state.agents.executor.lastLatencyMs = fill.latencyMs || 0;
+    state.agents.executor.fillSource = fill.source || 'jito-sim';
+    if (pnl > 0) {
+      state.agents.executor.flash = 'profit';
+      state.agents.risk.flash = 'profit';
+    }
 
     pos.tokens = round(pos.tokens - tokensToSell, 8);
     pos.remainingUsdBasis = round(pos.remainingUsdBasis - basis, 4);
@@ -941,11 +1220,32 @@ class PaperEngine {
     state.agents.risk.status = state.positions.length ? 'guarding' : 'idle';
     state.agents.risk.guarding = state.positions[0] ? state.positions[0].symbol : null;
 
-    // stats
+    // stats + feedback loop
     if (fullClose || reason === 'tp') {
       state.stats.realizedPnl = round((state.stats.realizedPnl || 0) + pnl, 4);
-      if (pnl >= 0) state.stats.wins = (state.stats.wins || 0) + 1;
-      else state.stats.losses = (state.stats.losses || 0) + 1;
+      if (pnl >= 0) {
+        state.stats.wins = (state.stats.wins || 0) + 1;
+        state.stats.winStreak = (state.stats.winStreak || 0) + 1;
+        state.stats.lossStreak = 0;
+      } else {
+        state.stats.losses = (state.stats.losses || 0) + 1;
+        state.stats.lossStreak = (state.stats.lossStreak || 0) + 1;
+        state.stats.winStreak = 0;
+        const lim = state.settings.lossStreakLimit || 3;
+        if (state.stats.lossStreak >= lim) {
+          state.cooldownUntil = now() + (state.settings.lossStreakCooldownMs || state.settings.cooldownMs || 300000);
+          state.agents.risk.status = 'cooldown';
+          state.agents.risk.lossStreak = state.stats.lossStreak;
+          state.agents.risk.cooldownUntil = state.cooldownUntil;
+          addActivity(state, {
+            type: 'risk',
+            symbol: '—',
+            agent: 'Risk',
+            detail: `Loss streak ${state.stats.lossStreak} → cooldown`,
+          });
+        }
+      }
+      state.agents.risk.lossStreak = state.stats.lossStreak || 0;
       state.stats.bestTrade = Math.max(state.stats.bestTrade || 0, pnl);
       state.stats.worstTrade = Math.min(state.stats.worstTrade || 0, pnl);
       const sid = pos.strategyId || state.settings.strategyId || 'balanced';
@@ -953,10 +1253,19 @@ class PaperEngine {
       state.stats.byStrategy[sid].trades += 1;
       state.stats.byStrategy[sid].pnl = round(state.stats.byStrategy[sid].pnl + pnl, 4);
       if (pnl >= 0) state.stats.byStrategy[sid].wins += 1;
+      if (fullClose) {
+        recordClosedTrade(state, {
+          breakdown: pos.scoreBreakdown,
+          pnl,
+          pnlPct,
+        });
+        state.agents.analyst.weights = topWeights(state.signalWeights, 4);
+      }
     }
     if (reason === 'whale') {
       state.stats.whaleExits = (state.stats.whaleExits || 0) + 1;
     }
+    if (fullClose) this.maybeProfitSweep();
 
     const type =
       reason === 'stop' ? 'stopped' : reason === 'whale' ? 'whale_exit' : reason === 'tp' ? 'tp' : 'sell';
@@ -1037,7 +1346,11 @@ class PaperEngine {
           }
           const prev = (state.whaleWatch[pos.mint] && state.whaleWatch[pos.mint].holders) || [];
           const events = detectSells(prev, holders, { dropPct, supply });
+          const buyEvents = detectBuys(prev, holders, { risePct: 25, supply });
           const latencyMs = now() - t0;
+          const reg = ensureRegistry(state);
+          const overlap = smartMoneyOverlap(reg, holders);
+          state.agents.whale.smartHits = overlap.hits;
           state.whaleWatch[pos.mint] = {
             symbol: pos.symbol,
             icon: pos.icon,
@@ -1045,6 +1358,8 @@ class PaperEngine {
             holders,
             updatedAt: now(),
             events: [...events, ...((state.whaleWatch[pos.mint] && state.whaleWatch[pos.mint].events) || [])].slice(0, 20),
+            buyEvents: buyEvents.slice(0, 10),
+            smartMoney: overlap,
             latencyMs,
           };
           preview.push({
@@ -1056,13 +1371,38 @@ class PaperEngine {
               owner: h.owner,
               pct: h.pct,
               amount: h.amount,
+              smart: !!isSmartWallet(reg, h.owner),
             })),
             latencyMs,
           });
 
+          // Smart-money buy on open position → hold / trail tighten note
+          for (const be of buyEvents) {
+            const sm = isSmartWallet(reg, be.owner);
+            if (sm && !sm.skipEntry) {
+              recordWalletEvent(reg, be.owner, { side: 'buy' });
+              pushSignal(reg, { type: 'buy', mint: pos.mint, wallet: be.owner, symbol: pos.symbol });
+              state.agents.whale.entrySignals = (state.agents.whale.entrySignals || 0) + 1;
+              state.agents.whale.flash = 'entry';
+              state.stats.whaleEntries = (state.stats.whaleEntries || 0) + 1;
+              addActivity(state, {
+                type: 'whale_entry',
+                symbol: pos.symbol,
+                icon: pos.icon,
+                agent: 'Whale Watch',
+                detail: `Smart buy · ${sm.label || short(be.owner)} · #${be.rank}`,
+                mint: pos.mint,
+              });
+            }
+          }
+
           if (events.length && settings.running && !state.killSwitch) {
             const ev = events[0];
-            const detail = `Whale exit: holder #${ev.rank || '?'} sold ${round(ev.soldPctOfBag, 1)}%`;
+            const sm = isSmartWallet(reg, ev.owner);
+            if (sm) recordWalletEvent(reg, ev.owner, { side: 'sell' });
+            const detail = sm
+              ? `Smart-money exit: ${sm.label || 'wallet'} sold ${round(ev.soldPctOfBag, 1)}%`
+              : `Whale exit: holder #${ev.rank || '?'} sold ${round(ev.soldPctOfBag, 1)}%`;
             state.agents.whale.lastAlert = {
               symbol: pos.symbol,
               detail,
@@ -1071,6 +1411,7 @@ class PaperEngine {
               owner: ev.owner,
             };
             state.agents.whale.latencyMs = latencyMs;
+            state.agents.whale.flash = 'alert';
             state.stats._whaleLatencySum = (state.stats._whaleLatencySum || 0) + latencyMs;
             const n = (state.stats.whaleExits || 0) + 1;
             state.stats.avgWhaleLatencyMs = round(state.stats._whaleLatencySum / n, 0);
@@ -1082,7 +1423,6 @@ class PaperEngine {
               detail: `${detail} · ${latencyMs}ms`,
               mint: pos.mint,
             });
-            // still have position?
             if (state.positions.find((p) => p.id === pos.id)) {
               await this.paperSell(pos, 'whale', detail, 1);
             }
