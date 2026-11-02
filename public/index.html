@@ -7,19 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="JEV — Solana memecoin paper-trading agents. Mode: PAPER. No real money." />
-  <link rel="manifest" href="/manifest.json?v=15" />
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=15" />
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=15" />
-  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=15" />
+  <link rel="manifest" href="/manifest.json?v=16" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=16" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=16" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=16" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <title>JEV Paper</title>
-  <link rel="stylesheet" href="/styles.css?v=15" />
+  <link rel="stylesheet" href="/styles.css?v=16" />
 </head>
 <body>
   <div id="lockScreen" class="lock-screen hide">
-    <img src="/img/j-logo.svg?v=15" alt="JEV" class="lock-logo" />
+    <img src="/img/j-logo.svg?v=16" alt="JEV" class="lock-logo" />
     <h1>JEV</h1>
     <p>Enter passcode to control agents</p>
     <input id="passInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Passcode" />
@@ -30,7 +30,7 @@
   <div id="app">
     <header class="desk-header">
       <div class="desk-brand">
-        <img src="/img/j-mark.svg?v=15" class="desk-logo" alt="J." />
+        <img src="/img/j-mark.svg?v=16" class="desk-logo" alt="J." />
         <div>
           <div class="desk-title">JEV</div>
           <div class="desk-sub" id="bannerText">Paper desk · memecoins</div>
@@ -79,6 +79,12 @@
         <span id="tradesCount" class="muted-count">0</span>
       </div>
       <div class="trade-feed" id="tradeStack"></div>
+
+      <div class="trades-head positions-head">
+        <h2>My Positions</h2>
+        <span id="positionsCount" class="muted-count">0</span>
+      </div>
+      <div class="positions-feed" id="positionsStack"></div>
     </main>
 
     <main id="view-coins" class="view">
@@ -102,6 +108,10 @@
       <div id="modeStats" class="strategy-stats"></div>
       <h2 class="subhead">By strategy</h2>
       <div id="strategyStats" class="strategy-stats"></div>
+      <h2 class="subhead">Data latency (free tier)</h2>
+      <div id="latencyStats" class="strategy-stats"></div>
+      <h2 class="subhead">Smart wallets (mined)</h2>
+      <div id="smartWalletStats" class="whale-stats"></div>
       <h2 class="subhead">Whale Watch</h2>
       <div id="whaleStats" class="whale-stats"></div>
       <h2 class="subhead">Settings</h2>
@@ -139,7 +149,7 @@
         <button class="btn-danger" id="resetBtn" type="button">Reset paper wallet</button>
         <button class="btn-muted" id="runToggle" type="button" aria-pressed="true"><span class="run-label">Agents On</span></button>
       </div>
-      <p class="disclaimer">No wallet keys. LIVE_ENABLED=false. PumpPortal WS + DexScreener · Jito-sim fills · smart-money whales · HELIUS_API_KEY optional.</p>
+      <p class="disclaimer">No wallet keys. LIVE_ENABLED=false. Free data: PumpPortal WS + public RPC rotate + DexScreener/Gecko/Jupiter · Jito+MEV sim · smart-wallet miner · optional free-tier HELIUS/APIFY/SUPABASE.</p>
     </main>
 
     <div id="coinSheet" class="sheet" aria-hidden="true">
@@ -184,7 +194,7 @@
       </button>
     </nav>
   </div>
-  <script src="/floor.js?v=15"></script>
-  <script src="/app.js?v=15"></script>
+  <script src="/floor.js?v=16"></script>
+  <script src="/app.js?v=16"></script>
 </body>
 </html>

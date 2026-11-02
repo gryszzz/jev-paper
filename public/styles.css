@@ -403,3 +403,79 @@ body { min-height: 100dvh; }
   vertical-align: middle;
 }
 .tr-runner { color: #fbbf24; background: #2a2410; }
+
+
+/* —— My Positions (Desk) —— */
+.positions-head { margin-top: 18px; }
+.positions-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 14px 28px;
+}
+.pos-row {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  cursor: pointer;
+}
+.pos-row:last-child { border-bottom: none; }
+.pos-row:active { background: rgba(255,255,255,0.03); }
+.pos-row img {
+  width: 34px; height: 34px; border-radius: 50%;
+  object-fit: cover; background: #222; margin-top: 2px;
+}
+.pos-mid { min-width: 0; }
+.pos-title {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  font-size: 13px; font-weight: 700; line-height: 1.25;
+}
+.pos-ticker { letter-spacing: 0.02em; }
+.pos-meta {
+  margin-top: 3px;
+  font-size: 10px; color: var(--muted); line-height: 1.35;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.pos-meta strong { color: var(--text); font-weight: 600; }
+.pos-right { text-align: right; min-width: 72px; }
+.pos-upnl { font-size: 13px; font-weight: 800; line-height: 1.15; }
+.pos-upnl.pos { color: var(--green); }
+.pos-upnl.neg { color: var(--red); }
+.pos-upnl .sub {
+  display: block; font-size: 10px; font-weight: 700; opacity: 0.85;
+}
+.pos-size {
+  margin-top: 2px; font-size: 9px; color: var(--muted); font-weight: 600;
+}
+.pos-progress {
+  margin-top: 8px;
+  height: 4px;
+  border-radius: 99px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+  position: relative;
+}
+.pos-progress .bar {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--purple2), var(--green));
+  width: 0%;
+  transition: width 0.35s ease;
+}
+.pos-progress.loss .bar {
+  background: linear-gradient(90deg, var(--red), #ff8a80);
+}
+.pos-progress-label {
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pos-empty {
+  font-size: 11px; color: var(--muted); text-align: center; padding: 16px 8px 8px;
+}

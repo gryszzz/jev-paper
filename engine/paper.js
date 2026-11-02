@@ -27,6 +27,9 @@ const {
   smartMoneyOverlap,
 } = require('./smartMoney');
 const { tagCoin, updateHeatMap, exposureByNarrative } = require('./narratives');
+const { runMiner, minerStats, feedbackFromPaper } = require('./smartWalletMiner');
+const xbuzz = require('./xbuzz');
+const { latencyStats: rpcLatencyStats } = require('./rpc');
 const {
   LANE,
   DEFAULT_LANE_CAPS,
@@ -543,10 +546,20 @@ class PaperEngine {
       solReserve: round(s.solReserve || 0, 4),
       heatMap: s.heatMap || {},
       signalWeights: topWeights(s.signalWeights, 6),
-      smartMoneyTop: (ensureRegistry(s).wallets || []).slice().sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),
+      smartMoneyTop: (ensureRegistry(s).wallets || []).slice().sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,8),
+      smartWalletMiner: minerStats(s),
+      xBuzz: xbuzz.stats(),
+      dataLatency: {
+        realtime: realtimeStats(),
+        rpc: rpcLatencyStats(),
+        executorMs: (s.agents && s.agents.executor && s.agents.executor.lastLatencyMs) || null,
+        whaleMs: (s.agents && s.agents.whale && s.agents.whale.latencyMs) || null,
+        freeTier: true,
+        paidRequired: false,
+      },
       realtime: realtimeStats(),
       disclaimer:
-        'PAPER ONLY — Mode: PAPER. PumpPortal WS + DexScreener fallback. Jito-sim fills. Whale Watch RPC + smart-money. LIVE_ENABLED=false. Optional HELIUS_API_KEY for faster RPC.',
+        'PAPER ONLY — Mode: PAPER. Free data: PumpPortal WS + public RPC rotate + DexScreener/Gecko/Jupiter. Jito+MEV sim fills. LIVE_ENABLED=false. Optional free-tier HELIUS_API_KEY / APIFY_TOKEN / SUPABASE_*.',
     };
   }
 
@@ -563,7 +576,9 @@ class PaperEngine {
           console.log('[jev] HELIUS_API_KEY detected — using Helius RPC');
         }
         const reg = ensureRegistry(this.state);
-        feed.watchAccountTrades(topAddresses(reg, 15));
+        const tops = topAddresses(reg, 12);
+        feed.watchAccountTrades(tops);
+        try { feed.startRpcWalletWatch(tops); } catch (_) {}
         this._tradeUnsub = feed.onTrade((msg) => this._onRealtimeTrade(msg));
       } catch (e) {
         console.warn('[jev] realtime feed', e.message);
@@ -571,6 +586,7 @@ class PaperEngine {
       this.tickScan().catch((e) => console.error('scan', e.message));
       this.tickPrices().catch((e) => console.error('prices', e.message));
       this.tickWhales().catch((e) => console.error('whales', e.message));
+      this.tickMiner().catch((e) => console.error('miner', e.message));
       this._scanTimer = setInterval(() => {
         this.tickScan().catch((e) => console.error('scan', e.message));
       }, DEFAULTS.scanIntervalMs);
@@ -581,6 +597,9 @@ class PaperEngine {
       this._whaleTimer = setInterval(() => {
         this.tickWhales().catch((e) => console.error('whales', e.message));
       }, whaleMs);
+      this._minerTimer = setInterval(() => {
+        this.tickMiner().catch((e) => console.error('miner', e.message));
+      }, 180000);
     });
   }
 
@@ -588,11 +607,36 @@ class PaperEngine {
     if (this._scanTimer) clearInterval(this._scanTimer);
     if (this._priceTimer) clearInterval(this._priceTimer);
     if (this._whaleTimer) clearInterval(this._whaleTimer);
-    this._scanTimer = this._priceTimer = this._whaleTimer = null;
+    if (this._minerTimer) clearInterval(this._minerTimer);
+    this._scanTimer = this._priceTimer = this._whaleTimer = this._minerTimer = null;
     try {
       if (this._tradeUnsub) this._tradeUnsub();
       feed.stop();
     } catch (_) {}
+  }
+
+  async tickMiner() {
+    const state = this.state;
+    if (!state) return;
+    const launches = realtimeLaunches();
+    const mints = [
+      ...((state.scanned || []).map((p) => p.mint)),
+      ...((state.positions || []).map((p) => p.mint)),
+    ].filter(Boolean);
+    await runMiner(state, { launches, mints: [...new Set(mints)].slice(0, 8) });
+    const symbols = [...new Set([
+      ...((state.scanned || []).map((p) => p.symbol)),
+      ...((state.positions || []).map((p) => p.symbol)),
+    ].filter(Boolean))].slice(0, 12);
+    try { await xbuzz.tickBuzz(symbols); } catch (_) {}
+    // refresh free RPC wallet watch with latest top wallets
+    try {
+      const tops = topAddresses(ensureRegistry(state), 12);
+      feed.watchAccountTrades(tops);
+      feed.startRpcWalletWatch(tops);
+    } catch (_) {}
+    this.persist();
+    this.emit();
   }
 
   _onRealtimeTrade(msg) {
@@ -997,11 +1041,14 @@ class PaperEngine {
             holders = await getTopHolders(p.mint, { limit: 8 });
           }
         } catch (_) {}
+        const xb = xbuzz.xBuzzScore(p);
+        p.xBuzzScore = xb.score;
         const r = await scorePair(p, settings, {
           state,
           heatMap: state.heatMap,
           smartMoney: reg,
           holders,
+          xBuzzScore: xb.score,
         });
         if (r.blacklistDev && p.mint) {
           if (!state.ruggedDevs.includes(p.mint)) state.ruggedDevs.push(p.mint);
@@ -1199,6 +1246,27 @@ class PaperEngine {
       urgency: lane === LANE.FRESH || pair.graduating ? 'high' : 'normal',
       lane,
     });
+    if (!fill || fill.ok === false) {
+      state.agents.executor.status = 'tx-fail-sim';
+      state.agents.executor.lastLatencyMs = (fill && fill.latencyMs) || 0;
+      state.agents.executor.flash = 'loss';
+      state.stats.failedTx = (state.stats.failedTx || 0) + 1;
+      state.activity.unshift({
+        id: uid('act'),
+        kind: 'fail',
+        symbol: pair.symbol,
+        detail: `Buy failed · ${(fill && fill.reason) || 'tx-fail-sim'} · MEV sim`,
+        ts: now(),
+        icon: pair.icon,
+      });
+      if (state.activity.length > 80) state.activity = state.activity.slice(0, 80);
+      this.persist();
+      this.emit();
+      return null;
+    }
+    if (fill.mev && fill.mev.sandwiched) {
+      state.stats.sandwiched = (state.stats.sandwiched || 0) + 1;
+    }
     const fillPrice = fill.fillPrice || pair.priceUsd * (1 + settings.slippage);
     const tokens = fill.tokens || spend / fillPrice;
     const feeUsd = round((fill.priorityFeeSol || 0) * (pair.solPriceUsd || 150) + spend * 0.0025, 4);
@@ -1578,6 +1646,26 @@ class PaperEngine {
       reason,
       lane: pos.lane || null,
     });
+    if (!fill || fill.ok === false) {
+      state.agents.executor.status = 'tx-fail-sim';
+      state.agents.executor.lastLatencyMs = (fill && fill.latencyMs) || 0;
+      state.stats.failedTx = (state.stats.failedTx || 0) + 1;
+      state.activity.unshift({
+        id: uid('act'),
+        kind: 'fail',
+        symbol: pos.symbol,
+        detail: `Sell failed · ${(fill && fill.reason) || 'tx-fail-sim'} — will retry`,
+        ts: now(),
+        icon: pos.icon,
+      });
+      if (state.activity.length > 80) state.activity = state.activity.slice(0, 80);
+      this.persist();
+      this.emit();
+      return null;
+    }
+    if (fill.mev && fill.mev.sandwiched) {
+      state.stats.sandwiched = (state.stats.sandwiched || 0) + 1;
+    }
     const fillPrice = fill.fillPrice || (pos.markPrice || pos.entryPrice) * (1 - state.settings.slippage);
     const proceeds = round(fill.proceedsUsd != null ? fill.proceedsUsd : tokensToSell * fillPrice, 4);
     const feeDrag = round((fill.priorityFeeSol || 0) * 150, 4);

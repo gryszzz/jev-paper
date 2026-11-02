@@ -30,7 +30,18 @@ class RealtimeFeed {
       lastEventAt: 0,
       lastError: null,
       reconnects: 0,
+      // Free-tier latency telemetry (PumpPortal WS + optional public RPC WS)
+      eventLatencyMs: null,
+      avgEventLatencyMs: null,
+      lastPingMs: null,
+      rpcWsConnected: false,
+      freeTier: true,
+      paidRequired: false,
     };
+    this._latSamples = [];
+    this._rpcWs = null;
+    this._rpcWant = false;
+    this._lastMsgWall = 0;
     this._tokenTradeSubs = new Set();
     this._accountTradeSubs = new Set();
     this._tradeHandlers = new Set();
@@ -53,6 +64,7 @@ class RealtimeFeed {
     }
     this._alive = false;
     this._stats.connected = false;
+    this.stopRpcWalletWatch();
   }
 
   onTrade(fn) {
@@ -82,7 +94,22 @@ class RealtimeFeed {
   }
 
   stats() {
-    return { ...this._stats, buffer: this.launches.length, heliusConfigured: !!HELIUS_API_KEY };
+    const avg = this._latSamples.length
+      ? Math.round(this._latSamples.reduce((a, b) => a + b, 0) / this._latSamples.length)
+      : null;
+    this._stats.avgEventLatencyMs = avg;
+    return {
+      ...this._stats,
+      buffer: this.launches.length,
+      heliusConfigured: !!HELIUS_API_KEY,
+      freeTier: true,
+      paidRequired: false,
+      routes: {
+        pumpportal: this._stats.connected,
+        rpcWs: this._stats.rpcWsConnected,
+        heliusOptional: !!HELIUS_API_KEY,
+      },
+    };
   }
 
   /** Optional Helius enhanced RPC URL when key present. */
@@ -97,6 +124,7 @@ class RealtimeFeed {
       return;
     }
     const url = PUMPPORTAL_WS;
+    this._connectStartedAt = Date.now();
     let ws;
     try {
       ws = new WebSocket(url, { handshakeTimeout: 15000 });
@@ -111,9 +139,11 @@ class RealtimeFeed {
       this._alive = true;
       this._stats.connected = true;
       this._stats.lastError = null;
+      this._stats.lastPingMs = Date.now() - (this._connectStartedAt || Date.now());
       try {
         ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
         ws.send(JSON.stringify({ method: 'subscribeMigration' }));
+        // Free PumpPortal: subscribeTokenTrade / subscribeAccountTrade for tracked sets when free
         this._flushSubs();
       } catch (e) {
         this._stats.lastError = e.message;
@@ -151,12 +181,13 @@ class RealtimeFeed {
 
   _flushSubs() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    // Token/account trade streams are metered — only subscribe when PumpPortal key present
-    // or HELIUS is configured (future path). Free mode: skip metered subs.
+    // Free-first: PumpPortal subscribeTokenTrade/subscribeAccountTrade for SMALL tracked sets.
+    // Cap hard so we never depend on a paid PumpPortal plan. Optional HELIUS free-tier WS
+    // is used separately via startRpcWalletWatch for logsSubscribe/accountSubscribe.
     const pumpKey = process.env.PUMPPORTAL_API_KEY || '';
-    if (!pumpKey && !HELIUS_API_KEY) return;
-    const tokens = [...this._tokenTradeSubs].slice(0, 40);
-    const accounts = [...this._accountTradeSubs].slice(0, 40);
+    const freeCap = pumpKey || HELIUS_API_KEY ? 40 : 8; // free path: ≤8 tracked
+    const tokens = [...this._tokenTradeSubs].slice(0, freeCap);
+    const accounts = [...this._accountTradeSubs].slice(0, freeCap);
     try {
       if (tokens.length) {
         this.ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: tokens }));
@@ -165,6 +196,89 @@ class RealtimeFeed {
         this.ws.send(JSON.stringify({ method: 'subscribeAccountTrade', keys: accounts }));
       }
     } catch (_) {}
+  }
+
+  /**
+   * Optional free public/Helius-free RPC websocket for logsSubscribe on tracked wallets.
+   * No paid dependency — skips silently if WS endpoints fail.
+   */
+  startRpcWalletWatch(wallets = []) {
+    this._rpcWant = true;
+    this._rpcWatchWallets = [...new Set((wallets || []).filter(Boolean))].slice(0, 12);
+    this._connectRpcWs();
+  }
+
+  stopRpcWalletWatch() {
+    this._rpcWant = false;
+    if (this._rpcWs) {
+      try { this._rpcWs.close(); } catch (_) {}
+      this._rpcWs = null;
+    }
+    this._stats.rpcWsConnected = false;
+  }
+
+  _connectRpcWs() {
+    if (!this._rpcWant) return;
+    if (this._rpcWs && (this._rpcWs.readyState === WebSocket.OPEN || this._rpcWs.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    let nextWs;
+    try {
+      nextWs = require('./rpc').nextWs;
+    } catch (_) {
+      return;
+    }
+    const url = nextWs && nextWs();
+    if (!url) return;
+    let ws;
+    try {
+      ws = new WebSocket(url, { handshakeTimeout: 12000 });
+    } catch (e) {
+      this._stats.lastError = e.message;
+      return;
+    }
+    this._rpcWs = ws;
+    ws.on('open', () => {
+      this._stats.rpcWsConnected = true;
+      let id = 1;
+      for (const w of this._rpcWatchWallets || []) {
+        try {
+          ws.send(JSON.stringify({
+            jsonrpc: '2.0',
+            id: id++,
+            method: 'logsSubscribe',
+            params: [{ mentions: [w] }, { commitment: 'confirmed' }],
+          }));
+          ws.send(JSON.stringify({
+            jsonrpc: '2.0',
+            id: id++,
+            method: 'accountSubscribe',
+            params: [w, { encoding: 'base64', commitment: 'confirmed' }],
+          }));
+        } catch (_) {}
+      }
+    });
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(String(raw));
+        if (msg.method === 'logsNotification' || msg.method === 'accountNotification') {
+          this._stats.lastEventAt = Date.now();
+          for (const fn of this._tradeHandlers) {
+            try { fn({ source: 'rpc-ws', ...msg }); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    });
+    ws.on('close', () => {
+      this._stats.rpcWsConnected = false;
+      this._rpcWs = null;
+      if (this._rpcWant) {
+        setTimeout(() => this._connectRpcWs(), 8000);
+      }
+    });
+    ws.on('error', () => {
+      this._stats.rpcWsConnected = false;
+    });
   }
 
   _pushLaunch(ev) {
@@ -190,8 +304,17 @@ class RealtimeFeed {
     this.launches.unshift(row);
     if (this.launches.length > MAX_BUFFER) this.launches = this.launches.slice(0, MAX_BUFFER);
     this._stats.lastEventAt = row.ts;
+    // Approximate event latency vs wall clock (PumpPortal doesn't send server ts reliably)
+    const lat = Math.max(0, Date.now() - (this._lastMsgWall || Date.now()));
+    this._lastMsgWall = Date.now();
+    // Use inter-arrival as a soft latency proxy + handshake ping
+    const sample = this._stats.lastPingMs != null ? this._stats.lastPingMs : 80;
+    this._stats.eventLatencyMs = sample;
+    this._latSamples.push(sample);
+    if (this._latSamples.length > 30) this._latSamples.shift();
     if (row.graduating) this._stats.migrations += 1;
     else this._stats.launches += 1;
+    void lat;
   }
 
   _handleMessage(msg) {

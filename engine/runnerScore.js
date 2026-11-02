@@ -187,8 +187,15 @@ function runnerScore(pair, ctx = {}) {
   if (hasSocials(pair) && components.buyerAccel >= 6) narrative = 3;
   else if (hasSocials(pair)) narrative = 1;
   if ((pair.narratives || []).length && components.buyerAccel >= 8) narrative = Math.min(5, narrative + 2);
+  // Free X buzz hook (Apify / bearer / ingest) — never required
+  const xb = Number(pair.xBuzzScore != null ? pair.xBuzzScore : (ctx.xBuzzScore || 0)) || 0;
+  if (xb > 0) narrative = Math.min(5, Math.max(narrative, xb));
   components.narrative = clamp(narrative, 0, 5);
-  breakdown.push({ k: 'narrative', v: components.narrative, note: hasSocials(pair) ? 'socials' : 'none' });
+  breakdown.push({
+    k: 'narrative',
+    v: components.narrative,
+    note: xb ? `x-buzz ${xb}` : hasSocials(pair) ? 'socials' : 'none',
+  });
 
   // ——— I. Structure 0–5 ———
   let structure = 0;

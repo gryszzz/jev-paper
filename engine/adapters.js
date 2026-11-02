@@ -62,6 +62,47 @@ function simulateLatencyMs({ liquidity = 0, urgency = 'normal', lane = null } = 
   return base + thin + jitter;
 }
 
+/**
+ * Live-grade paper hazards (FREE sim — no paid infra):
+ * - sandwich/MEV adverse selection on thin books & FRESH lane
+ * - random failed-tx / dropped landing (priority fee insufficient)
+ * - extra slip when competing with Jito searchers
+ */
+function simulateMevHazard({ liquidity = 0, amountUsd = 0, side = 'buy', lane = null, urgency = 'normal' } = {}) {
+  const liq = Math.max(Number(liquidity) || 0, 1);
+  const size = Math.max(Number(amountUsd) || 0, 1);
+  const thin = liq < 40000;
+  let sandwichProb = thin ? 0.12 : liq < 100000 ? 0.05 : 0.02;
+  if (lane === 'FRESH') sandwichProb += 0.1;
+  else if (lane === 'GRAD') sandwichProb += 0.04;
+  if (urgency === 'high' || urgency === 'panic') sandwichProb += 0.03;
+  sandwichProb = clamp(sandwichProb, 0, 0.45);
+
+  let failProb = thin ? 0.06 : 0.02;
+  if (lane === 'FRESH') failProb += 0.05;
+  if (urgency === 'panic') failProb += 0.03;
+  failProb = clamp(failProb, 0, 0.25);
+
+  const sandwiched = Math.random() < sandwichProb;
+  const failed = Math.random() < failProb;
+
+  // Extra adverse slip if sandwiched (buy pays more / sell gets less)
+  let mevSlipExtra = 0;
+  if (sandwiched) {
+    const impact = clamp((size / liq) * 3.5, 0.008, 0.08);
+    mevSlipExtra = impact + (thin ? 0.015 : 0.006);
+  }
+  return {
+    sandwiched,
+    failed,
+    sandwichProb,
+    failProb,
+    mevSlipExtra,
+    note: failed ? 'tx-fail-sim' : sandwiched ? 'sandwich-sim' : 'clean',
+  };
+}
+
+
 class PaperAdapter extends TradeAdapter {
   constructor({ jupiterQuote, fallbackSlippage = 0.02 } = {}) {
     super();
@@ -98,7 +139,8 @@ class PaperAdapter extends TradeAdapter {
         if (q && q.outAmount && q.inAmount) {
           // Blend Jupiter impact with our dynamic floor so thin books stay realistic
           const jupImpact = (Number(q.priceImpactPct) || 0) / 100;
-          const slip = Math.max(dynSlip, jupImpact);
+          const mev = simulateMevHazard({ liquidity: liq, amountUsd: usd, side: 'buy', lane, urgency });
+          const slip = Math.max(dynSlip, jupImpact) + mev.mevSlipExtra;
           const fillPrice = (q.effectivePrice || markPrice) * (1 + Math.max(0, slip - jupImpact) * 0.5);
           return {
             source: 'jupiter+jito-sim',
@@ -106,25 +148,31 @@ class PaperAdapter extends TradeAdapter {
             tokens: fillPrice > 0 ? usd / fillPrice : q.outAmountUi,
             impactPct: slip * 100,
             priorityFeeSol,
-            latencyMs,
+            latencyMs: latencyMs + (mev.sandwiched ? 90 : 0),
             route: q.routeLabel || 'jupiter',
             jito: true,
             dynSlippage: dynSlip,
+            mev,
+            failed: mev.failed,
           };
         }
       } catch (_) {}
     }
-    const fillPrice = (markPrice || 0) * (1 + dynSlip);
+    const mev = simulateMevHazard({ liquidity: liq, amountUsd: usd, side: 'buy', lane, urgency });
+    const slip = dynSlip + mev.mevSlipExtra;
+    const fillPrice = (markPrice || 0) * (1 + slip);
     return {
       source: 'jito-sim',
       fillPrice,
       tokens: fillPrice > 0 ? usd / fillPrice : 0,
-      impactPct: dynSlip * 100,
+      impactPct: slip * 100,
       priorityFeeSol,
-      latencyMs,
+      latencyMs: latencyMs + (mev.sandwiched ? 90 : 0),
       route: 'simulated-jito',
       jito: true,
       dynSlippage: dynSlip,
+      mev,
+      failed: mev.failed,
     };
   }
 
@@ -153,7 +201,8 @@ class PaperAdapter extends TradeAdapter {
         });
         if (q && q.outAmount) {
           const jupImpact = (Number(q.priceImpactPct) || 0) / 100;
-          const slip = Math.max(dynSlip, jupImpact);
+          const mev = simulateMevHazard({ liquidity: liq, amountUsd: notional, side: 'sell', lane: opts.lane || null, urgency });
+          const slip = Math.max(dynSlip, jupImpact) + mev.mevSlipExtra;
           const fillPrice = (q.effectivePrice || markPrice) * (1 - Math.max(0, slip - jupImpact) * 0.5);
           return {
             source: 'jupiter+jito-sim',
@@ -161,37 +210,67 @@ class PaperAdapter extends TradeAdapter {
             proceedsUsd: tokens * fillPrice,
             impactPct: slip * 100,
             priorityFeeSol,
-            latencyMs,
+            latencyMs: latencyMs + (mev.sandwiched ? 70 : 0),
             route: q.routeLabel || 'jupiter',
             jito: true,
             dynSlippage: dynSlip,
+            mev,
+            failed: mev.failed,
           };
         }
       } catch (_) {}
     }
-    const fillPrice = (markPrice || 0) * (1 - dynSlip);
+    const mev = simulateMevHazard({ liquidity: liq, amountUsd: notional, side: 'sell', lane: opts.lane || null, urgency });
+    const slip = dynSlip + mev.mevSlipExtra;
+    const fillPrice = (markPrice || 0) * (1 - slip);
     return {
       source: 'jito-sim',
       fillPrice,
       proceedsUsd: tokens * fillPrice,
-      impactPct: dynSlip * 100,
+      impactPct: slip * 100,
       priorityFeeSol,
-      latencyMs,
+      latencyMs: latencyMs + (mev.sandwiched ? 70 : 0),
       route: 'simulated-jito',
       jito: true,
       dynSlippage: dynSlip,
+      mev,
+      failed: mev.failed,
     };
   }
 
   async buy(mint, amountUsd, opts = {}) {
     const q = await this.quoteBuy(mint, amountUsd, opts.markPrice, opts);
     if (q.latencyMs) await new Promise((r) => setTimeout(r, Math.min(q.latencyMs, 800)));
+    if (q.failed) {
+      return {
+        ok: false,
+        paper: true,
+        error: 'simulated-tx-fail',
+        reason: (q.mev && q.mev.note) || 'tx-fail-sim',
+        priorityFeeSol: q.priorityFeeSol,
+        latencyMs: q.latencyMs,
+        mev: q.mev,
+        amountUsd,
+      };
+    }
     return { ok: true, paper: true, ...q, amountUsd };
   }
 
   async sell(mint, tokenAmount, opts = {}) {
     const q = await this.quoteSell(mint, tokenAmount, opts.markPrice, opts);
     if (q.latencyMs) await new Promise((r) => setTimeout(r, Math.min(q.latencyMs, 800)));
+    if (q.failed) {
+      return {
+        ok: false,
+        paper: true,
+        error: 'simulated-tx-fail',
+        reason: (q.mev && q.mev.note) || 'tx-fail-sim',
+        priorityFeeSol: q.priorityFeeSol,
+        latencyMs: q.latencyMs,
+        mev: q.mev,
+        tokenAmount,
+      };
+    }
     return { ok: true, paper: true, ...q, tokenAmount };
   }
 }
@@ -240,4 +319,5 @@ module.exports = {
   dynamicSlippage,
   simulateJitoFee,
   simulateLatencyMs,
+  simulateMevHazard,
 };

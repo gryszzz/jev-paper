@@ -282,6 +282,7 @@ async function scorePair(pair, settings, ctx = {}) {
     sniper,
     holdersGrowing: ctx.holdersGrowing,
     deployerTier: ctx.deployerTier,
+    xBuzzScore: ctx.xBuzzScore || pair.xBuzzScore || 0,
   });
   const bandAct = runnerBandAction(runner.score);
   // Gate: analyst minScore AND runner band (unless runner disabled)

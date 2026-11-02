@@ -352,6 +352,119 @@
     return jevFloor;
   }
 
+
+  function holdDuration(openedAt) {
+    if (!openedAt) return '—';
+    const ms = Date.now() - openedAt;
+    if (ms < 60e3) return Math.max(1, Math.floor(ms / 1000)) + 's';
+    if (ms < 3600e3) return Math.floor(ms / 60e3) + 'm';
+    const h = Math.floor(ms / 3600e3);
+    const m = Math.floor((ms % 3600e3) / 60e3);
+    return h + 'h' + (m ? m + 'm' : '');
+  }
+
+  /** TP/trail progress 0–100 toward next ladder rung or trail cushion. */
+  function positionProgress(p) {
+    const entry = Number(p.entryPrice) || 0;
+    const mark = Number(p.markPrice) || entry;
+    if (!entry) return { pct: 0, label: '—', loss: false };
+    const pnlPct = entry ? ((mark - entry) / entry) * 100 : 0;
+    const ladder = (p.ladder || []).filter((r) => !r.hit);
+    const next = ladder[0];
+    if (next && next.mult != null) {
+      const targetPct = (Number(next.mult) - 1) * 100;
+      if (targetPct > 0) {
+        const pct = Math.max(0, Math.min(100, (pnlPct / targetPct) * 100));
+        return {
+          pct,
+          label: `TP ${Number(next.mult).toFixed(2)}x · ${Math.round(pct)}%`,
+          loss: pnlPct < 0,
+        };
+      }
+    }
+    // Trail: how far above trail stop
+    const trail = Number(p.trailStop) || 0;
+    if (trail > 0 && mark > 0) {
+      const cushion = ((mark - trail) / mark) * 100;
+      const pct = Math.max(0, Math.min(100, cushion * 4)); // ~25% cushion → full bar
+      return {
+        pct,
+        label: `Trail $${trail.toPrecision(4)} · ${cushion.toFixed(1)}% cushion`,
+        loss: pnlPct < 0,
+      };
+    }
+    const stop = Number(p.stopPrice) || 0;
+    if (stop > 0 && entry > stop) {
+      const room = entry - stop;
+      const used = Math.max(0, entry - mark);
+      const pct = Math.max(0, Math.min(100, (1 - used / room) * 100));
+      return { pct, label: `Stop cushion ${Math.round(pct)}%`, loss: pnlPct < 0 };
+    }
+    return {
+      pct: Math.max(0, Math.min(100, 50 + pnlPct)),
+      label: pnlPct >= 0 ? 'In profit' : 'Under water',
+      loss: pnlPct < 0,
+    };
+  }
+
+  function renderMyPositions() {
+    if (!state) return;
+    const stack = $('positionsStack');
+    const countEl = $('positionsCount');
+    if (!stack) return;
+    const pos = state.positions || [];
+    if (countEl) countEl.textContent = String(pos.length);
+    if (!pos.length) {
+      stack.innerHTML = '<div class="pos-empty">No open positions — waiting for fills</div>';
+      return;
+    }
+    stack.innerHTML = pos
+      .map((p) => {
+        const entry = Number(p.entryPrice) || 0;
+        const mark = Number(p.markPrice) || entry;
+        const value = Number(p.markValue != null ? p.markValue : (p.tokens || 0) * mark) || 0;
+        const pnl = Number(p.pnl) || (entry ? value - (Number(p.remainingUsdBasis) || Number(p.amountUsd) || 0) : 0);
+        const pnlPct = Number(p.pnlPct);
+        const pctVal = Number.isFinite(pnlPct)
+          ? pnlPct
+          : entry
+            ? ((mark - entry) / entry) * 100
+            : 0;
+        const mode = (p.tradeMode || '').toUpperCase();
+        const modeBadge = mode ? `<span class="tr-mode mode-${mode.toLowerCase()}">${mode}</span>` : '';
+        const rScore = p.runnerScore != null ? `<span class="tr-runner">R${p.runnerScore}</span>` : '';
+        const lane = (p.lane || '').toUpperCase();
+        const laneBadge = lane ? `<span class="tr-lane lane-${lane.toLowerCase()}">${lane}</span>` : '';
+        const img = p.icon || iconFallback(p.symbol);
+        const prog = positionProgress(p);
+        const pnlCls = pnl >= 0 ? 'pos' : 'neg';
+        return `<div class="pos-row" data-mint="${p.mint || ''}">
+          <img src="${img}" alt="" onerror="this.src='${iconFallback(p.symbol)}'"/>
+          <div class="pos-mid">
+            <div class="pos-title">
+              <span class="pos-ticker">$${p.symbol || '—'}</span>
+              ${laneBadge}${modeBadge}${rScore}
+            </div>
+            <div class="pos-meta">
+              <span>Entry <strong>${entry ? entry.toPrecision(4) : '—'}</strong></span>
+              <span>Now <strong>${mark ? mark.toPrecision(4) : '—'}</strong></span>
+              <span>Held <strong>${holdDuration(p.openedAt)}</strong></span>
+            </div>
+            <div class="pos-progress ${prog.loss ? 'loss' : ''}"><div class="bar" style="width:${prog.pct.toFixed(1)}%"></div></div>
+            <div class="pos-progress-label"><span>${prog.label}</span><span>${money(value)}</span></div>
+          </div>
+          <div class="pos-right">
+            <div class="pos-upnl ${pnlCls}">${money(pnl)}<span class="sub">${pct(pctVal)}</span></div>
+            <div class="pos-size">${money(p.amountUsd || p.remainingUsdBasis || 0, 0)} size</div>
+          </div>
+        </div>`;
+      })
+      .join('');
+    stack.querySelectorAll('.pos-row').forEach((el) => {
+      el.onclick = () => openCoin(el.dataset.mint);
+    });
+  }
+
   function renderDesk() {
     if (!state) return;
     const agents = state.agents || {};
@@ -427,6 +540,7 @@
         };
       }
     }
+    renderMyPositions();
   }
 
   function agentLiveLine(key, a, s) {
@@ -516,6 +630,8 @@
       ['Worst', money(st.worstTrade || 0)],
       ['Avg whale react', `${st.avgWhaleLatencyMs || 0} ms`],
       ['Day PnL', money(state.dayPnl || 0)],
+      ['Failed tx (sim)', String(st.failedTx || 0)],
+      ['Sandwiched (sim)', String(st.sandwiched || 0)],
     ]
       .map(([lbl, val]) => `<div class="stat-card"><div class="lbl">${lbl}</div><div class="val">${val}</div></div>`)
       .join('');
@@ -573,6 +689,38 @@
           })
           .join('')
       : '<div class="strategy-row"><span>No closed trades yet</span></div>';
+
+    const latEl = $('latencyStats');
+    if (latEl) {
+      const dl = state.dataLatency || {};
+      const rt = dl.realtime || state.realtime || {};
+      const rpc = dl.rpc || {};
+      const rows = [
+        ['PumpPortal WS', rt.connected ? 'up' : 'down', rt.avgEventLatencyMs != null ? rt.avgEventLatencyMs + 'ms avg' : (rt.lastPingMs != null ? rt.lastPingMs + 'ms ping' : '—')],
+        ['RPC WS (free)', rt.rpcWsConnected ? 'up' : 'off', rpc.avgMs != null ? rpc.avgMs + 'ms avg' : '—'],
+        ['RPC rotate', (rpc.endpoints || 0) + ' eps', rpc.lastMs != null ? rpc.lastMs + 'ms last' : '—'],
+        ['Executor fill', dl.executorMs != null ? dl.executorMs + 'ms' : '—', 'jito+mev sim'],
+        ['Whale poll', dl.whaleMs != null ? dl.whaleMs + 'ms' : '—', 'holders'],
+        ['Helius', rt.heliusConfigured || rpc.helius ? 'optional free' : 'unset', 'not required'],
+        ['X buzz', (state.xBuzz && state.xBuzz.mode) || 'stub', (state.xBuzz && state.xBuzz.enabled) ? 'on' : 'off'],
+      ];
+      latEl.innerHTML = rows
+        .map(([a, b, c]) => `<div class="strategy-row"><span>${a}</span><strong>${b} · ${c}</strong></div>`)
+        .join('');
+    }
+
+    const smEl = $('smartWalletStats');
+    if (smEl) {
+      const top = (state.smartMoneyTop || (state.smartWalletMiner && state.smartWalletMiner.top) || []).slice(0, 8);
+      smEl.innerHTML = top.length
+        ? top
+            .map((w) => {
+              const addr = w.address || '';
+              return `<div class="whale-row"><span>${w.label || 'wallet'} · ${shortAddr(addr)}</span><strong>score ${Math.round(w.score || 0)} · ${w.buys || 0}B/${w.sells || 0}S${w.mined ? ' · mined' : ''}</strong></div>`;
+            })
+            .join('')
+        : '<div class="whale-row"><span>Miner idle — will populate from launches</span></div>';
+    }
 
     const ww = state.whaleWatch || {};
     const mints = Object.keys(ww);

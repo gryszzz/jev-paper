@@ -1,0 +1,233 @@
+{
+  "at": "2026-11-02T21:46:31.301Z",
+  "summary": {
+    "universe": 30,
+    "taken": 5,
+    "skipped": 25,
+    "wins": 1,
+    "losses": 4,
+    "winRate": 20,
+    "pnl": -3.1101,
+    "avgPnl": -0.622,
+    "sandwiched": 2,
+    "byArm": {
+      "T2": {
+        "n": 1,
+        "pnl": -0.3204,
+        "wins": 0,
+        "losses": 1
+      },
+      "T1": {
+        "n": 1,
+        "pnl": -0.6661,
+        "wins": 0,
+        "losses": 1
+      },
+      "CONTROL": {
+        "n": 3,
+        "pnl": -2.1236,
+        "wins": 1,
+        "losses": 2
+      }
+    },
+    "byBand": {
+      "scalp": {
+        "n": 5,
+        "pnl": -3.1100999999999996
+      }
+    },
+    "skipReasons": {
+      "runner-gate": 25
+    }
+  },
+  "folds": [
+    {
+      "fold": 1,
+      "n": 10,
+      "summary": {
+        "universe": 10,
+        "taken": 1,
+        "skipped": 9,
+        "wins": 0,
+        "losses": 1,
+        "winRate": 0,
+        "pnl": -0.3204,
+        "avgPnl": -0.3204,
+        "sandwiched": 0,
+        "byArm": {
+          "T2": {
+            "n": 1,
+            "pnl": -0.3204,
+            "wins": 0,
+            "losses": 1
+          }
+        },
+        "byBand": {
+          "scalp": {
+            "n": 1,
+            "pnl": -0.3204
+          }
+        },
+        "skipReasons": {
+          "runner-gate": 9
+        }
+      }
+    },
+    {
+      "fold": 2,
+      "n": 10,
+      "summary": {
+        "universe": 10,
+        "taken": 1,
+        "skipped": 9,
+        "wins": 0,
+        "losses": 1,
+        "winRate": 0,
+        "pnl": -0.6661,
+        "avgPnl": -0.6661,
+        "sandwiched": 0,
+        "byArm": {
+          "T1": {
+            "n": 1,
+            "pnl": -0.6661,
+            "wins": 0,
+            "losses": 1
+          }
+        },
+        "byBand": {
+          "scalp": {
+            "n": 1,
+            "pnl": -0.6661
+          }
+        },
+        "skipReasons": {
+          "runner-gate": 9
+        }
+      }
+    },
+    {
+      "fold": 3,
+      "n": 10,
+      "summary": {
+        "universe": 10,
+        "taken": 3,
+        "skipped": 7,
+        "wins": 1,
+        "losses": 2,
+        "winRate": 33.3,
+        "pnl": -2.1236,
+        "avgPnl": -0.7079,
+        "sandwiched": 2,
+        "byArm": {
+          "CONTROL": {
+            "n": 3,
+            "pnl": -2.1236,
+            "wins": 1,
+            "losses": 2
+          }
+        },
+        "byBand": {
+          "scalp": {
+            "n": 3,
+            "pnl": -2.1236
+          }
+        },
+        "skipReasons": {
+          "runner-gate": 7
+        }
+      }
+    }
+  ],
+  "sample": [
+    {
+      "skipped": false,
+      "symbol": "three",
+      "mint": "FeMbDoX7R1Psc4GEcvJdsbNbZA3bfztcyDCatJVJpump",
+      "runnerScore": 44,
+      "band": "scalp",
+      "arm": "T2",
+      "entryPx": 0.0004841299362383268,
+      "fwdPct": 0.19,
+      "netRetPct": -3.2,
+      "pnl": -0.3204,
+      "exitReason": "time",
+      "sandwiched": false,
+      "sizeUsd": 10,
+      "narratives": [
+        "other"
+      ]
+    },
+    {
+      "skipped": false,
+      "symbol": "DOLLARSE",
+      "mint": "J34sjwqUYsicH2A6aNoMn91MAPYkUUdXsyfFBLBNDoLL",
+      "runnerScore": 41,
+      "band": "scalp",
+      "arm": "T1",
+      "entryPx": 0.0010411276230567392,
+      "fwdPct": 0.22,
+      "netRetPct": -6.66,
+      "pnl": -0.6661,
+      "exitReason": "time",
+      "sandwiched": false,
+      "sizeUsd": 10,
+      "narratives": [
+        "other"
+      ]
+    },
+    {
+      "skipped": false,
+      "symbol": "PI",
+      "mint": "93VGqXL76voGxc43apJTDJoKkqnxTht1BKWoEmUypump",
+      "runnerScore": 51,
+      "band": "scalp",
+      "arm": "CONTROL",
+      "entryPx": 0.000060367346922618515,
+      "fwdPct": -8.24,
+      "netRetPct": -15.51,
+      "pnl": -1.5513,
+      "exitReason": "time",
+      "sandwiched": false,
+      "sizeUsd": 10,
+      "narratives": [
+        "animal"
+      ]
+    },
+    {
+      "skipped": false,
+      "symbol": "GTA",
+      "mint": "G6F6SYSUAUxsnKLyeRW29hE5A4BGCbw91x7HMPySpump",
+      "runnerScore": 44,
+      "band": "scalp",
+      "arm": "CONTROL",
+      "entryPx": 0.000025704087500000003,
+      "fwdPct": -4.28,
+      "netRetPct": -13.75,
+      "pnl": -1.3755,
+      "exitReason": "time",
+      "sandwiched": true,
+      "sizeUsd": 10,
+      "narratives": [
+        "other"
+      ]
+    },
+    {
+      "skipped": false,
+      "symbol": "SHORT",
+      "mint": "CAoAQvqA8qQXrBFgVXwcasueKRdHJ8Cim7ixMTZSpump",
+      "runnerScore": 50,
+      "band": "scalp",
+      "arm": "CONTROL",
+      "entryPx": 0.00002174304409465377,
+      "fwdPct": 32.39,
+      "netRetPct": 8.03,
+      "pnl": 0.8032,
+      "exitReason": "tp",
+      "sandwiched": true,
+      "sizeUsd": 10,
+      "narratives": [
+        "other"
+      ]
+    }
+  ]
+}

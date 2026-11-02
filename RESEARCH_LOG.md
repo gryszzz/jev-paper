@@ -409,3 +409,32 @@ Promote T* only if OOS expectancy &gt; Control and DD &lt; Control.
 ---
 
 *End of playbook. Update when walk-forward reweights Runner Score.*
+
+---
+
+## Backtest headlines (free-tier walk-forward)
+
+**Run:** 11/2/2026, 4:46:31 PM America/New_York · sources: pump.fun + DexScreener (free) · fill sim: Jito+MEV+fail · no paid APIs
+
+| Metric | Value |
+|---|---|
+| Universe | 30 |
+| Taken / skipped | 5 / 25 |
+| Win rate | 20% (1W/4L) |
+| Total PnL (paper $10 ea) | $-3.1101 |
+| Avg PnL / trade | $-0.622 |
+| Sandwiched fills | 2 |
+
+### By A/B arm
+
+- **T2**: n=1 · pnl=$-0.32 · 0W/1L
+- **T1**: n=1 · pnl=$-0.67 · 0W/1L
+- **CONTROL**: n=3 · pnl=$-2.12 · 1W/2L
+
+### Walk-forward folds
+
+- Fold 1 (n=10): taken=1 win=0% pnl=$-0.3204
+- Fold 2 (n=10): taken=1 win=0% pnl=$-0.6661
+- Fold 3 (n=10): taken=3 win=33.3% pnl=$-2.1236
+
+> Caveat: Dex `priceChange` windows are noisy labels (look-ahead haircut 40%). Treat as research ranking, not live expectancy.
