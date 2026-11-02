@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="JEV">
+  <defs>
+    <linearGradient id="jg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#39ff8c"/>
+      <stop offset="55%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#000"/>
+  <rect x="28" y="28" width="456" height="456" rx="96" fill="#0a0a0a" stroke="url(#jg)" stroke-width="10"/>
+  <text x="268" y="360" text-anchor="middle" font-family="Inter, SF Pro Display, system-ui, sans-serif"
+        font-size="320" font-weight="800" fill="url(#jg)" filter="url(#glow)" letter-spacing="-12">J</text>
+</svg>

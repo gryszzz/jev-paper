@@ -6,10 +6,11 @@
   <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="description" content="JEV — Solana memecoin paper-trading agents. No real money." />
+  <meta name="description" content="JEV — Solana memecoin paper-trading agents. Mode: PAPER. No real money." />
   <link rel="manifest" href="/manifest.json" />
-  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -17,10 +18,21 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <div id="lockScreen" class="lock-screen hide">
+    <img src="/img/j-logo.svg" alt="JEV" class="lock-logo" />
+    <h1>JEV</h1>
+    <p>Enter passcode to control agents</p>
+    <input id="passInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Passcode" />
+    <button id="passSubmit" class="btn-purple" type="button">Unlock</button>
+    <p id="passError" class="pass-error hide">Wrong passcode</p>
+  </div>
+
   <div id="app">
     <header class="top-banner" id="banner">
+      <img src="/img/j-mark.svg" class="banner-mark" alt="" />
       <img id="bannerIcon" class="banner-icon hide" alt="" />
-      <span id="bannerText">JEV · paper mode</span>
+      <span id="bannerText">JEV · Mode: PAPER</span>
+      <span class="mode-badge" id="modeBadge">Mode: PAPER</span>
     </header>
 
     <main id="view-home" class="view active">
@@ -28,7 +40,7 @@
         <div class="balance-row">
           <div id="balance" class="odometer">$0.00</div>
           <button id="runToggle" class="run-toggle" type="button" aria-pressed="true">
-            <span class="dot"></span><span class="run-label">Live</span>
+            <span class="dot"></span><span class="run-label">On</span>
           </button>
         </div>
         <div class="gain-row">
@@ -52,9 +64,9 @@
 
       <section class="section-head">
         <h2>Agents</h2>
-        <span class="pill-green" id="agentsRunning">4 running</span>
+        <span class="pill-green" id="agentsRunning">5 agents</span>
       </section>
-      <div class="agents-carousel" id="agentsCarousel"></div>
+      <div class="agents-grid" id="agentsGrid"></div>
 
       <section class="section-head">
         <h2>Activity</h2>
@@ -67,7 +79,16 @@
 
     <main id="view-agents" class="view">
       <h1 class="page-title">Agents</h1>
-      <div id="agentsFull" class="agents-full"></div>
+      <div id="agentsFull" class="agents-grid agents-grid-lg"></div>
+    </main>
+
+    <main id="view-stats" class="view">
+      <h1 class="page-title">Stats</h1>
+      <div class="stats-cards" id="statsCards"></div>
+      <h2 class="subhead">By strategy</h2>
+      <div id="strategyStats" class="strategy-stats"></div>
+      <h2 class="subhead">Whale Watch</h2>
+      <div id="whaleStats" class="whale-stats"></div>
     </main>
 
     <main id="view-activity" class="view">
@@ -78,12 +99,22 @@
     <main id="view-account" class="view">
       <h1 class="page-title">Account</h1>
       <div class="account-card">
-        <div class="acct-row"><span>Mode</span><strong class="green">PAPER ONLY</strong></div>
+        <div class="acct-row"><span>Mode</span><strong class="green" id="acctMode">PAPER</strong></div>
+        <div class="acct-row"><span>Live flag</span><strong id="acctLive">DISABLED</strong></div>
         <div class="acct-row"><span>Cash</span><strong id="acctCash">$0</strong></div>
         <div class="acct-row"><span>Equity</span><strong id="acctEquity">$0</strong></div>
         <div class="acct-row"><span>Peak</span><strong id="acctPeak">$0</strong></div>
         <div class="acct-row"><span>Open positions</span><strong id="acctPos">0</strong></div>
+        <div class="acct-row"><span>Day PnL</span><strong id="acctDay">$0</strong></div>
       </div>
+
+      <h2 class="subhead">Strategy preset</h2>
+      <div class="preset-row" id="presetRow">
+        <button type="button" data-preset="safe" class="preset-btn">Safe</button>
+        <button type="button" data-preset="balanced" class="preset-btn active">Balanced</button>
+        <button type="button" data-preset="aggressive" class="preset-btn">Aggressive</button>
+      </div>
+
       <label class="field">
         <span>Starting balance (next reset)</span>
         <input id="startBal" type="number" min="10" step="1" value="100" />
@@ -100,11 +131,24 @@
         <span>Min analyst score</span>
         <input id="minScore" type="number" min="1" max="100" step="1" value="70" />
       </label>
+      <label class="field">
+        <span>Whale sell threshold (%)</span>
+        <input id="whaleDrop" type="number" min="1" max="100" step="1" value="15" />
+      </label>
+      <label class="field">
+        <span>Whale poll interval (ms)</span>
+        <input id="whalePoll" type="number" min="5000" max="120000" step="1000" value="20000" />
+      </label>
+
       <div class="btn-row">
         <button class="btn-purple" id="saveSettings" type="button">Save settings</button>
+        <button class="btn-danger" id="killBtn" type="button">Kill switch</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn-muted" id="clearKillBtn" type="button">Clear kill switch</button>
         <button class="btn-danger" id="resetBtn" type="button">Reset paper wallet</button>
       </div>
-      <p class="disclaimer">No wallet keys. No real Solana transactions. DexScreener public data only. Install from your browser Share → Add to Home Screen.</p>
+      <p class="disclaimer">No wallet keys in the client. LIVE_ENABLED=false. LiveAdapter is a stub. DexScreener + pump.fun + RugCheck + Jupiter quotes + Solana RPC holders. Install: Share → Add to Home Screen.</p>
     </main>
 
     <div id="coinSheet" class="sheet" aria-hidden="true">
@@ -123,6 +167,8 @@
         <div class="stats-grid" id="coinStats"></div>
         <div class="pos-card" id="posCard"></div>
         <div class="risk-card" id="riskCard"></div>
+        <h3 class="sheet-h">Whale Watch</h3>
+        <div class="whale-box" id="whaleBox"></div>
       </div>
     </div>
 
@@ -136,6 +182,10 @@
       <button data-tab="agents" class="nav-btn" type="button">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3.5 19c.8-3 2.8-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><path d="M14 19c.4-2 1.6-3.2 3.5-3.2 1.4 0 2.5.7 3 2"/></svg>
         <span>Agents</span>
+      </button>
+      <button data-tab="stats" class="nav-btn" type="button">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-8"/></svg>
+        <span>Stats</span>
       </button>
       <button data-tab="activity" class="nav-btn" type="button">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h3l2-5 3 10 2-5h8"/></svg>
