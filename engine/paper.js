@@ -720,14 +720,33 @@ function buildTradeStats(state) {
     if (peak > 0) maxDd = Math.max(maxDd, (peak - e) / peak);
   }
 
+  const bump = (bag, key, pnl) => {
+    if (!key) return;
+    const k = String(key).toUpperCase();
+    bag[k] = bag[k] || { trades: 0, pnl: 0, wins: 0, losses: 0 };
+    bag[k].trades += 1;
+    bag[k].pnl = round(bag[k].pnl + (Number(pnl) || 0), 4);
+    if ((pnl || 0) > 0) bag[k].wins += 1;
+    else bag[k].losses += 1;
+  };
+
+  const byLane = { FRESH: { trades: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
+  const byMode = { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
+  const byArm = { CONTROL: { trades: 0, pnl: 0, wins: 0, losses: 0 }, T1: { trades: 0, pnl: 0, wins: 0, losses: 0 }, T2: { trades: 0, pnl: 0, wins: 0, losses: 0 }, T3: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
   const bySignal = {};
   for (const t of closed) {
+    const pnl = Number(t.pnl) || 0;
+    bump(byLane, t.lane || 'MOVER', pnl);
+    let mode = String(t.tradeMode || t.mode || 'RIDE').toUpperCase();
+    if (mode === 'MOONBAG') mode = 'MOON';
+    bump(byMode, mode, pnl);
+    bump(byArm, t.abArm || t.arm || 'CONTROL', pnl);
     for (const sig of t.signals || []) {
       const k = String(sig);
       bySignal[k] = bySignal[k] || { trades: 0, pnl: 0, wins: 0, losses: 0 };
       bySignal[k].trades += 1;
-      bySignal[k].pnl = round(bySignal[k].pnl + (Number(t.pnl) || 0), 4);
-      if ((t.pnl || 0) > 0) bySignal[k].wins += 1;
+      bySignal[k].pnl = round(bySignal[k].pnl + pnl, 4);
+      if (pnl > 0) bySignal[k].wins += 1;
       else bySignal[k].losses += 1;
     }
   }
@@ -750,6 +769,9 @@ function buildTradeStats(state) {
     avgHoldMs: Math.round(holdAvg),
     rugStops,
     hardStops,
+    byLane,
+    byMode,
+    byArm,
     bySignal,
     best5: best5.map(compactTrade),
     worst5: worst5.map(compactTrade),

@@ -647,12 +647,11 @@
     const cards = [
       ['Realized P&L', money(realized), pnlCls(realized)],
       ['Win rate', `${winRate}%`, winRate >= 50 ? 'pos' : winRate > 0 ? '' : ''],
-      ['Expectancy', money(expectancy), pnlCls(expectancy)],
+      ['Expectancy / trade', money(expectancy), pnlCls(expectancy)],
       ['Avg W / L', `${money(avgWin)} / ${money(avgLoss)}`, ''],
       ['Profit factor', fmtPf, pf >= 1 ? 'pos' : pf > 0 ? 'neg' : ''],
       ['Max DD', `${maxDd}%`, maxDd > 20 ? 'neg' : ''],
       ['Trades', String(trades), ''],
-      ['Reserve', money(state.solReserve || 0), ''],
     ];
     $('statsCards').innerHTML = cards
       .map(([lbl, val, cls]) => `<div class="stat-card"><div class="lbl">${lbl}</div><div class="val ${cls}">${val}</div></div>`)
@@ -661,7 +660,8 @@
     const row = (left, right, extra = '') =>
       `<div class="strategy-row"><span>${left}</span><strong class="${extra}">${right}</strong></div>`;
 
-    const byLane = st.byLane || {};
+    // Prefer ledger-backed tradeStats; fall back to aggregate counters only if empty.
+    const byLane = (ts.byLane && Object.keys(ts.byLane).length) ? ts.byLane : (st.byLane || {});
     const laneEl = $('laneStats');
     if (laneEl) {
       laneEl.innerHTML = ['FRESH', 'GRAD', 'MOVER']
@@ -679,12 +679,12 @@
 
     const modeEl = $('modeStats');
     if (modeEl) {
-      const byMode = st.byMode || {};
+      const byMode = (ts.byMode && Object.keys(ts.byMode).length) ? ts.byMode : (st.byMode || {});
       modeEl.innerHTML = ['SCALP', 'RIDE', 'MOON']
         .map((k) => {
-          const r = byMode[k] || {};
+          const r = byMode[k] || byMode[k === 'MOON' ? 'MOONBAG' : k] || {};
           return row(
-            `<span class="tr-mode mode-${k.toLowerCase()}">${k}</span>`,
+            `<span class="tr-mode mode-${k.toLowerCase()}">${k === 'MOON' ? 'MOONBAG' : k}</span>`,
             `${r.trades || 0} · ${money(r.pnl || 0)} · ${r.wins || 0}W/${r.losses || 0}L`,
             pnlCls(r.pnl || 0)
           );
@@ -694,7 +694,7 @@
 
     const armEl = $('armStats');
     if (armEl) {
-      const byArm = st.byArm || {};
+      const byArm = (ts.byArm && Object.keys(ts.byArm).length) ? ts.byArm : (st.byArm || {});
       armEl.innerHTML = ['CONTROL', 'T1', 'T2', 'T3']
         .map((k) => {
           const r = byArm[k] || {};
@@ -742,10 +742,15 @@
       const hold = ts.avgHoldMs || 0;
       const holdLbl = hold < 60000 ? Math.round(hold / 1000) + 's' : Math.round(hold / 60000) + 'm';
       const inv = state.wealthInvariant || {};
+      const L = state.learn || {};
+      const learnStatus = L.status || (L.lastPromoteAt && (!L.lastRejectAt || L.lastPromoteAt >= L.lastRejectAt) ? 'promoted' : (L.lastRejectAt ? 'rejected' : 'idle'));
+      const learnVer = L.promotedVersion || L.weightsVersion || 0;
       meta.innerHTML = [
         row('Avg hold', holdLbl),
-        row('Rug / hard stops', `${ts.rugStops || st.rugStops || 0} / ${ts.hardStops || 0}`),
-        row('Sweeps locked', `${st.sweeps || 0} · ${money(st.sweptUsd || 0)}`),
+        row('Rug-stops', String(ts.rugStops || st.rugStops || 0)),
+        row('Hard stops', String(ts.hardStops || 0)),
+        row('Reserve / sweeps', `${money(state.solReserve || 0)} · ${st.sweeps || 0}`),
+        row('Learner', `v${learnVer} · ${learnStatus} · n=${L.labeled || 0}`),
         row('Books', inv.ok === false ? `drift ${money(inv.drift || 0)}` : 'invariant ok', inv.ok === false ? 'neg' : 'pos'),
       ].join('');
     }
