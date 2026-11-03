@@ -37,18 +37,19 @@ const xbuzz = require('./xbuzz');
 const { latencyStats: rpcLatencyStats } = require('./rpc');
 const {
   LANE,
-  DEFAULT_LANE_CAPS,
-  LANE_DEFAULTS,
-  classifyLane,
   laneGates,
   lanePriority,
   laneSizeMult,
   laneRiskProfile,
-  exposureByLane,
   laneCapOk,
-  bumpLaneStats,
-  bondingProgress,
-  hasSocials,
+  moverSlotCap,
+  countByCanonicalLane,
+  canonicalLane,
+  isNewPairLane,
+  exposureByLane,
+  DEFAULT_LANE_CAPS,
+  LANE_DEFAULTS,
+  classifyLane,
 } = require('./lanes');
 const {
   MODE_TAG,
@@ -117,7 +118,7 @@ const DEFAULTS = {
   mintStopBlacklistMs: 24 * 3600e3, // after hard stop / liq shock
   dustUsd: 1.0, // force-close leftover dust to free slots
   preferNovelMints: true,
-  maxMoverPositions: 1,
+  maxMoverPositions: 0, // ≤20% slots; with maxPositions=3 → 0 movers when new-pair avail
   minEntryLiquidity: 15000, // hard veto before buy
   liqPullExitPct: 0.5, // exit if live liq < entry * this
 };
@@ -202,7 +203,7 @@ function ensureLiquidityFloor(settings = {}) {
 function defaultTimeStopMs(pos) {
   const lane = (pos && pos.lane) || 'MOVER';
   const mode = (pos && pos.tradeMode) || 'RIDE';
-  if (lane === 'FRESH' || mode === 'SCALP') return 15 * 60e3;
+  if (lane === 'SNIPE' || lane === 'FRESH' || mode === 'SCALP') return 6 * 60e3;
   if (mode === 'MOON') return 6 * 3600e3;
   return 45 * 60e3;
 }
@@ -294,7 +295,7 @@ function ensureLaneSettings(state) {
   s.lanes = { ...LANE_DEFAULTS, ...(s.lanes || {}) };
   state.stats = state.stats || emptyStats();
   state.stats.byLane = state.stats.byLane || emptyStats().byLane;
-  for (const k of ['FRESH', 'GRAD', 'MOVER']) {
+  for (const k of ['SNIPE', 'TRACTION', 'MOVER', 'FRESH', 'GRAD']) {
     state.stats.byLane[k] = state.stats.byLane[k] || { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 };
   }
   state.stats.byArm = state.stats.byArm || emptyArmStats();
@@ -323,7 +324,7 @@ function emptyStats() {
     sweeps: 0,
     sweptUsd: 0,
     byStrategy: {},
-    byLane: { FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } },
+    byLane: { SNIPE: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, TRACTION: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } },
     byArm: null,
     byMode: { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } },
   };
@@ -543,7 +544,7 @@ function migrateState(raw) {
         const lane = pos.lane || 'MOVER';
         const mode = pos.tradeMode || 'RIDE';
         let ms = 45 * 60e3;
-        if (lane === 'FRESH' || mode === 'SCALP') ms = 15 * 60e3;
+        if (lane === 'SNIPE' || lane === 'FRESH' || mode === 'SCALP') ms = 6 * 60e3;
         else if (mode === 'MOON') ms = 6 * 3600e3;
         pos.timeStopAt = pos.openedAt + ms;
       }
@@ -749,7 +750,7 @@ function buildTradeStats(state) {
     else bag[k].losses += 1;
   };
 
-  const byLane = { FRESH: { trades: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
+  const byLane = { SNIPE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, TRACTION: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, pnl: 0, wins: 0, losses: 0 }, FRESH: { trades: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
   const byMode = { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
   const byArm = { CONTROL: { trades: 0, pnl: 0, wins: 0, losses: 0 }, T1: { trades: 0, pnl: 0, wins: 0, losses: 0 }, T2: { trades: 0, pnl: 0, wins: 0, losses: 0 }, T3: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
   const bySignal = {};
@@ -909,7 +910,7 @@ class PaperEngine {
           const st = this.state.stats;
           st.bestTrade = 0;
           st.worstTrade = 0;
-          st.byLane = { FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } };
+          st.byLane = { SNIPE: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, TRACTION: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } };
           st.byMode = { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
           st.byArm = null;
           st.byStrategy = {};
@@ -1765,7 +1766,7 @@ class PaperEngine {
             if ((tr.volUsd || 0) > (Number(p.volumeM5) || 0)) p.volumeM5 = Math.round(tr.volUsd);
             p._wsTraction = { uniqueBuyers: ub, buys: tr.buys || 0, volUsd: tr.volUsd || 0 };
           }
-          if (p.lane === LANE.FRESH || p.fromPump) watch.push(p.mint);
+          if (isNewPairLane(p.lane) || p.fromPump) watch.push(p.mint);
         }
         if (watch.length) feed.watchTokenTrades(watch.slice(0, 40));
       } catch (_) {}
@@ -1815,7 +1816,7 @@ class PaperEngine {
         p.freshTraction = fq.traction || 0;
         eyesBoost += fq.softBonus || 0;
         eyesBoost -= fq.softPenalty || 0;
-        if (!fq.pass && (p.lane === LANE.FRESH || p.fromPump)) {
+        if (!fq.pass && (isNewPairLane(p.lane) || p.fromPump)) {
           eyesBoost -= 20;
           p._freshReject = true;
         }
@@ -1898,7 +1899,7 @@ class PaperEngine {
         .filter((p) => {
           // Hard quality: reused image / dup name-ticker never enter FRESH book
           if (p._freshReject || p.freshQualityOk === false) {
-            if (p.lane === LANE.FRESH || p.fromPump || String(p.source || '').includes('pump')) {
+            if (isNewPairLane(p.lane) || p.fromPump || String(p.source || '').includes('pump')) {
               p._laneGate = { ok: false, why: (p.freshQualityReasons || ['quality']).join('+') };
               return false;
             }
@@ -1909,13 +1910,13 @@ class PaperEngine {
           // lane-specific liquidity floor (gates handle FRESH/GRAD/MOVER)
           if (p.lane === LANE.MOVER && p.liquidity < Math.max(15000, settings.minLiquidity || 15000)) return false;
           // FRESH: allow pump-curve synthetics; only reject dust
-          if (p.lane === LANE.FRESH) {
-            const floor = Math.min(2500, (settings.lanes && settings.lanes.freshMinLiq) || 800);
+          if (canonicalLane(p.lane) === LANE.SNIPE) {
+            const floor = Math.min(2500, (settings.lanes && settings.lanes.snipeMinLiq) || (settings.lanes && settings.lanes.freshMinLiq) || 800);
             const liq = Number(p.liquidity) || 0;
             if (liq > 0 && liq < Math.min(floor, 500) && !p.fromPump) return false;
             if (liq > 0 && liq < 300) return false;
           }
-          if (p.lane === LANE.GRAD && p.liquidity > 0 && p.liquidity < Math.max(8000, (settings.lanes && settings.lanes.gradMinLiq) || 8000)) return false;
+          if (canonicalLane(p.lane) === LANE.TRACTION && p.liquidity > 0 && p.liquidity < Math.max(1500, (settings.lanes && settings.lanes.tractionMinLiq) || (settings.lanes && settings.lanes.gradMinLiq) || 1500)) return false;
           return true;
         })
         .sort((a, b) => {
@@ -1928,7 +1929,7 @@ class PaperEngine {
             if (bg !== ag) return bg - ag;
           }
           // prefer faster bonding velocity / younger within lane
-          if (a.lane === LANE.FRESH || b.lane === LANE.FRESH) {
+          if (canonicalLane(a.lane) === LANE.SNIPE || canonicalLane(b.lane) === LANE.SNIPE) {
             const aa = a.ageMs != null ? a.ageMs : 1e15;
             const ba = b.ageMs != null ? b.ageMs : 1e15;
             if (aa !== ba) return aa - ba;
@@ -2096,16 +2097,24 @@ class PaperEngine {
         }
         // Score threshold, then hard FRESH floors — novelty/boosts cannot revive thin zero-vol
         r.pass = r.score >= (settings.minScore || 70);
-        if (p.lane === LANE.FRESH) {
+        const cLane = canonicalLane(p.lane);
+        if (cLane === LANE.SNIPE) {
           const u = Number(p.uniqueBuyers || p.buyersM5 || 0) || 0;
           const b5 = Number(p.buysM5) || 0;
           const v5 = Math.max(Number(p.volumeM5) || 0, (Number(p.volumeH1) || 0) * 0.35);
-          if (u < 3 && b5 < 5) r.pass = false;
-          if (v5 < 500) r.pass = false;
+          const triggerOk = !!(p.copyHit || p.smartHits || p.whaleCluster || u >= 5 || b5 >= 8);
+          if (!triggerOk && u < 2 && b5 < 3) r.pass = false;
+          if (!triggerOk && v5 > 0 && v5 < 200) r.pass = false;
           const novPts = (r.breakdown || [])
             .filter((b) => b && b.k === 'novelty')
             .reduce((s, b) => s + (Number(b.v) || 0), 0);
-          if ((r.score || 0) - novPts < 40) r.pass = false;
+          if ((r.score || 0) - novPts < 35) r.pass = false;
+        } else if (cLane === LANE.TRACTION) {
+          const u = Number(p.uniqueBuyers || p.buyersM5 || 0) || 0;
+          const b5 = Number(p.buysM5) || 0;
+          const v5 = Math.max(Number(p.volumeM5) || 0, (Number(p.volumeH1) || 0) * 0.35);
+          if (u < 6 && b5 < 8) r.pass = false;
+          if (v5 < 1200) r.pass = false;
         }
         scored.push({ ...p, ...r, narratives: p.narratives || r.narratives || tagCoin(p), features: feat });
       }
@@ -2139,7 +2148,7 @@ class PaperEngine {
       const openMints = new Set(state.positions.map((p) => p.mint));
       const eqNow = equity(state);
       const moverOpen = state.positions.filter((x) => (x.lane || LANE.MOVER) === LANE.MOVER).length;
-      const maxMover = settings.maxMoverPositions != null ? settings.maxMoverPositions : 1;
+      const maxMover = Math.min(moverSlotCap(settings), settings.maxMoverPositions != null ? settings.maxMoverPositions : 99);
       const candidates = scored.filter((p) => {
         if (!p.pass || openMints.has(p.mint)) return false;
         // Never re-buy a mint we already traded unless Mode B reclaim path
@@ -2159,10 +2168,10 @@ class PaperEngine {
             return false;
           }
         }
-        const lane = p.lane || LANE.MOVER;
-        // Cap MOVERs, but never starve open slots when FRESH/GRAD candidates are absent
-        const freshOrGradAvail = scored.some((x) => x.pass && (x.lane === LANE.FRESH || x.lane === LANE.GRAD) && !openMints.has(x.mint) && !tradedLedger.recentlyTraded(x.mint) && !state.seenMints.includes(x.mint));
-        const moverCap = freshOrGradAvail ? maxMover : Math.max(maxMover, Math.min(settings.maxPositions || 3, 2));
+        const lane = canonicalLane(p.lane || LANE.MOVER);
+        // Cap MOVERs to ≤20% of slots; never starve when no SNIPE/TRACTION candidates
+        const newPairAvail = scored.some((x) => x.pass && isNewPairLane(x.lane) && !openMints.has(x.mint) && !tradedLedger.recentlyTraded(x.mint) && !state.seenMints.includes(x.mint));
+        const moverCap = newPairAvail ? maxMover : Math.max(maxMover, Math.min(1, settings.maxPositions || 3));
         if (lane === LANE.MOVER && moverOpen >= moverCap) {
           p.laneCapHit = true;
           return false;
@@ -2178,8 +2187,8 @@ class PaperEngine {
         const tradedA = tradedLedger.everTraded(a.mint) || state.seenMints.includes(a.mint) ? 1 : 0;
         const tradedB = tradedLedger.everTraded(b.mint) || state.seenMints.includes(b.mint) ? 1 : 0;
         if (settings.preferNovelMints !== false && tradedA !== tradedB) return tradedA - tradedB;
-        const freshA = (a.lane === LANE.FRESH || a.source === 'pumpportal' || a.fromPump) ? 1 : 0;
-        const freshB = (b.lane === LANE.FRESH || b.source === 'pumpportal' || b.fromPump) ? 1 : 0;
+        const freshA = (isNewPairLane(a.lane) || a.source === 'pumpportal' || a.fromPump) ? (canonicalLane(a.lane) === LANE.SNIPE ? 2 : 1) : 0;
+        const freshB = (isNewPairLane(b.lane) || b.source === 'pumpportal' || b.fromPump) ? (canonicalLane(b.lane) === LANE.SNIPE ? 2 : 1) : 0;
         if (freshA !== freshB) return freshB - freshA;
         if (settings.preferEarlyLanes !== false) {
           const dp = lanePriority(b.lane) - lanePriority(a.lane);
@@ -2196,14 +2205,18 @@ class PaperEngine {
       });
       // Hard reserve: if any FRESH/new-pool candidate passes, pick it before GRAD/MOVER
       // when we have fewer than freshReserve open FRESH positions.
-      const freshOpen = state.positions.filter((x) => (x.lane || '') === LANE.FRESH).length;
-      const freshReserve = Math.max(1, Math.min(2, settings.maxPositions || 3));
-      if (freshOpen < freshReserve) {
-        const freshFirst = candidates.filter((p) => p.lane === LANE.FRESH || p.source === 'pumpportal' || p.fromPump);
-        const rest = candidates.filter((p) => !(p.lane === LANE.FRESH || p.source === 'pumpportal' || p.fromPump));
-        if (freshFirst.length) {
+      // Hard reserve: keep ≥80% slots for SNIPE/TRACTION when available
+      const laneCounts = countByCanonicalLane(state.positions);
+      const newPairOpen = (laneCounts.SNIPE || 0) + (laneCounts.TRACTION || 0);
+      const newPairReserve = Math.max(1, Math.ceil((settings.maxPositions || 3) * 0.8));
+      if (newPairOpen < newPairReserve) {
+        const prefer = candidates.filter((p) => isNewPairLane(p.lane) || p.source === 'pumpportal' || p.fromPump);
+        const rest = candidates.filter((p) => !(isNewPairLane(p.lane) || p.source === 'pumpportal' || p.fromPump));
+        // SNIPE before TRACTION
+        prefer.sort((a, b) => lanePriority(b.lane) - lanePriority(a.lane) || (b.score || 0) - (a.score || 0));
+        if (prefer.length) {
           candidates.length = 0;
-          candidates.push(...freshFirst, ...rest);
+          candidates.push(...prefer, ...rest);
         }
       }
 
@@ -2299,11 +2312,13 @@ class PaperEngine {
     {
       const minEntry = settings.minEntryLiquidity != null ? settings.minEntryLiquidity : 15000;
       const liqNow = Number(pair.liquidity) || 0;
-      const laneGuess = pair.lane || LANE.MOVER;
-      const floor = laneGuess === LANE.FRESH
-        ? Math.min(minEntry, (settings.lanes && settings.lanes.freshMinLiq) || 800)
-        : minEntry;
-      const isPumpFresh = laneGuess === LANE.FRESH && (pair.fromPump || /pump/i.test(String(pair.source || '')));
+      const laneGuess = canonicalLane(pair.lane || LANE.MOVER);
+      const floor = laneGuess === LANE.SNIPE
+        ? Math.min(minEntry, (settings.lanes && (settings.lanes.snipeMinLiq || settings.lanes.freshMinLiq)) || 400)
+        : laneGuess === LANE.TRACTION
+          ? Math.min(minEntry, (settings.lanes && settings.lanes.tractionMinLiq) || 1500)
+          : minEntry;
+      const isPumpFresh = laneGuess === LANE.SNIPE && (pair.fromPump || /pump/i.test(String(pair.source || '')));
       if (isPumpFresh) {
         if (liqNow > 0 && liqNow < 300) {
           addActivity(state, {
@@ -2372,9 +2387,11 @@ class PaperEngine {
     const rScore = Number(pair.runnerScore) || 0;
     const arm = settings.abHarness === false ? AB_ARMS.CONTROL : pickArm(state, rScore);
     // pickArm already falls through when gate fails; keep a soft log only if CONTROL substituted
-    const armMinRunner = lane === LANE.FRESH
-      ? Math.max(15, (arm.minRunner || 30) - 15)
-      : (arm.minRunner || 30);
+    const armMinRunner = canonicalLane(lane) === LANE.SNIPE
+      ? Math.max(12, (arm.minRunner || 30) - 18)
+      : canonicalLane(lane) === LANE.TRACTION
+        ? Math.max(18, (arm.minRunner || 30) - 8)
+        : (arm.minRunner || 30);
     if (arm.useRunnerGate && rScore < armMinRunner) {
       // Should be rare after pickArm fallthrough — skip rather than take under-gated treatment
       addActivity(state, {
@@ -2397,13 +2414,26 @@ class PaperEngine {
     );
     let modeLetter = arm.forcedMode || decision.mode || 'A';
     if (!arm.useRunnerGate && settings.abHarness === false) {
-      // pure control: no mode tagging beyond RIDE default ladder
       modeLetter = 'A';
     }
     if (arm.id === 'CONTROL') modeLetter = modeLetter || 'A';
-    const modeTag = MODE_TAG[modeLetter] || 'RIDE';
-    const modeRisk = modeRiskProfile(modeLetter, rScore, arm.risk);
+    // New-pair specialist defaults: SNIPE→SCALP, TRACTION→RIDE (moonbag only on strength)
+    const cEntry = canonicalLane(lane);
+    if (arm.id === 'CONTROL' || !arm.forcedMode) {
+      if (cEntry === LANE.SNIPE) modeLetter = 'B'; // SCALP
+      else if (cEntry === LANE.TRACTION) modeLetter = 'A'; // RIDE
+    }
+    let modeTag = MODE_TAG[modeLetter] || 'RIDE';
     const laneRisk = laneRiskProfile(lane, settings);
+    if (cEntry === LANE.SNIPE && laneRisk.moonbagOnlyIfTraction) {
+      const tractionBuilding = (Number(pair.uniqueBuyers || 0) >= 8) || (Number(pair.freshTraction || 0) >= 2) || !!pair.copyHit;
+      if (!tractionBuilding && modeTag === 'MOON') modeTag = 'SCALP';
+    }
+    if (cEntry === LANE.TRACTION && laneRisk.moonbagOnStrength) {
+      const strong = (Number(pair.runnerScore) || 0) >= 55 || (Number(pair.freshTraction || 0) >= 3) || !!pair.copyHit;
+      if (strong && modeLetter === 'A') { /* stay RIDE; moonbag remainder via ladder */ }
+    }
+    const modeRisk = modeRiskProfile(modeLetter, rScore, arm.risk);
     // Merge: arm/mode overrides lane for treatment; control keeps lane + settings
     const risk =
       arm.id === 'CONTROL'
@@ -2456,7 +2486,7 @@ class PaperEngine {
       markPrice: pair.priceUsd,
       liquidity: pair.liquidity,
       baseSlippage: settings.slippage,
-      urgency: lane === LANE.FRESH || pair.graduating ? 'high' : 'normal',
+      urgency: isNewPairLane(lane) || pair.graduating ? 'high' : 'normal',
       lane,
     });
     if (!fill || fill.ok === false) {

@@ -594,3 +594,8 @@ body { min-height: 100dvh; }
   font-size: 11px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
 }
 .learn-stats .strat-row:last-child { border-bottom: none; }
+
+.lane-snipe { color: #ff4fd8; text-shadow: 0 0 8px #ff4fd866; }
+.lane-traction { color: #3dffa8; text-shadow: 0 0 8px #3dffa866; }
+.lane-fresh { color: #ff4fd8; }
+.lane-grad { color: #3dffa8; }

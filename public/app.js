@@ -664,7 +664,7 @@
     const byLane = (ts.byLane && Object.keys(ts.byLane).length) ? ts.byLane : (st.byLane || {});
     const laneEl = $('laneStats');
     if (laneEl) {
-      laneEl.innerHTML = ['FRESH', 'GRAD', 'MOVER']
+      laneEl.innerHTML = ['SNIPE', 'TRACTION', 'MOVER']
         .map((k) => {
           const r = byLane[k] || {};
           const n = r.trades || 0;

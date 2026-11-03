@@ -193,11 +193,20 @@ class RealtimeFeed {
     const tokens = [...this._tokenTradeSubs].slice(0, freeCap);
     const accounts = [...this._accountTradeSubs].slice(0, freeCap);
     try {
-      if (tokens.length) {
-        this.ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: tokens }));
-      }
-      if (accounts.length) {
-        this.ws.send(JSON.stringify({ method: 'subscribeAccountTrade', keys: accounts }));
+      // PumpPortal gates token/account trade subs behind a funded API key (≥0.02 SOL).
+      // Without a key, skip and rely on free RPC logsSubscribe via startRpcWalletWatch.
+      if (pumpKey) {
+        if (tokens.length) {
+          this.ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: tokens }));
+        }
+        if (accounts.length) {
+          this.ws.send(JSON.stringify({ method: 'subscribeAccountTrade', keys: accounts }));
+        }
+        this._stats.accountTradeMode = 'pumpportal-key';
+      } else {
+        this._stats.accountTradeMode = 'rpc-only';
+        this._stats.accountTradeNote =
+          'PumpPortal account-trade needs API key; using free RPC wallet watch';
       }
     } catch (_) {}
   }
