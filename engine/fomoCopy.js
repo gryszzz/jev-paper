@@ -91,35 +91,64 @@ function gmgnHeaders() {
   };
 }
 
-/** Node fetch is TLS-fingerprinted by GMGN (403); curl works. */
+/** GMGN blocks Node TLS fingerprint; prefer curl. Render egress often gets CF HTML — detect + fall through. */
 async function fetchGmgnJson(url) {
+  const curlArgs = [
+    '-sS',
+    '--max-time',
+    '18',
+    '-A',
+    GMGN_UA,
+    '-H',
+    'Accept: application/json,text/plain,*/*',
+    '-H',
+    'Accept-Language: en-US,en;q=0.9',
+    '-H',
+    'Referer: https://gmgn.ai/?chain=sol',
+    '-H',
+    'Origin: https://gmgn.ai',
+    '-H',
+    'sec-fetch-dest: empty',
+    '-H',
+    'sec-fetch-mode: cors',
+    '-H',
+    'sec-fetch-site: same-origin',
+    url,
+  ];
   try {
-    return await fetchJson(url, {
-      ttlMs: 0,
-      key: `gmgn-node-${Date.now()}`,
-      headers: gmgnHeaders(),
-      timeoutMs: 12000,
-    });
-  } catch (e) {
-    const { stdout } = await execFileAsync(
-      'curl',
-      [
-        '-sS',
-        '--max-time',
-        '15',
-        '-A',
-        GMGN_UA,
-        '-H',
-        'Accept: application/json',
-        '-H',
-        'Referer: https://gmgn.ai/',
-        url,
-      ],
-      { maxBuffer: 8 * 1024 * 1024 }
-    );
-    const d = JSON.parse(stdout || '{}');
+    const { stdout } = await execFileAsync('curl', curlArgs, { maxBuffer: 8 * 1024 * 1024 });
+    const body = (stdout || '').trim();
+    if (!body || body.startsWith('<!') || body.startsWith('<html')) {
+      throw new Error(`gmgn html/block: ${body.slice(0, 80)}`);
+    }
+    const d = JSON.parse(body);
     if (d && (d.code === 0 || d.data)) return d;
-    throw new Error(`gmgn curl empty/err: ${(stdout || '').slice(0, 120)}`);
+    throw new Error(`gmgn curl empty/err: ${body.slice(0, 120)}`);
+  } catch (curlErr) {
+    try {
+      return await fetchJson(url, {
+        ttlMs: 0,
+        key: `gmgn-node-${Date.now()}`,
+        headers: gmgnHeaders(),
+        timeoutMs: 12000,
+      });
+    } catch (e) {
+      throw new Error(curlErr.message || e.message);
+    }
+  }
+}
+
+function loadSeedLeaders() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const p = path.join(__dirname, 'data', 'gmgn-copy-seed.json');
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const ageH = (Date.now() - (raw.fetchedAt || 0)) / 3600e3;
+    const rows = (raw.rows || []).filter((r) => r && r.address && !r.wash);
+    return { rows, ageH, fetchedAt: raw.fetchedAt || 0 };
+  } catch (_) {
+    return { rows: [], ageH: Infinity, fetchedAt: 0 };
   }
 }
 
@@ -306,7 +335,18 @@ async function ingestCopyLeaders(state, opts = {}) {
       sources.push('gmgn');
       STATS.gmgnOk += 1;
     }
-    STATS.lastError = leaders.length ? null : STATS.lastError || 'no leaders';
+    if (!gmgn.length) {
+      const seed = loadSeedLeaders();
+      if (seed.rows.length) {
+        leaders.push(...seed.rows);
+        sources.push('gmgn-seed');
+        STATS.lastError = (STATS.lastError ? STATS.lastError + '; ' : '') + `live gmgn empty → seed n=${seed.rows.length} ageH=${seed.ageH.toFixed(1)}`;
+      } else {
+        STATS.lastError = STATS.lastError || 'no leaders';
+      }
+    } else {
+      STATS.lastError = leaders.length ? null : STATS.lastError || 'no leaders';
+    }
   } catch (e) {
     STATS.lastError = e.message;
     try {
@@ -316,8 +356,15 @@ async function ingestCopyLeaders(state, opts = {}) {
       STATS.gmgnOk += 1;
       STATS.lastError = null;
     } catch (e2) {
-      STATS.lastError = e2.message;
-      leaders = [];
+      const seed = loadSeedLeaders();
+      if (seed.rows.length) {
+        leaders = seed.rows;
+        sources.push('gmgn-seed');
+        STATS.lastError = `${e2.message}; seed n=${seed.rows.length}`;
+      } else {
+        STATS.lastError = e2.message;
+        leaders = [];
+      }
     }
   }
 

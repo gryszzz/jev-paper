@@ -162,8 +162,13 @@ async function runMiner(state, ctx = {}) {
       // Cap RPC pressure — only every other mint per pass if many
       if (mints.indexOf(m) % 2 === 0) await mineTopHolders(reg, m, { limit: 5 });
     }
-    // GMGN smart-money + KOL (+ Fomo if keyed) — first tick immediate, then ~15m
-    const needCopy = !fomoCopy.STATS.lastRunAt || Date.now() - fomoCopy.STATS.lastRunAt > 15 * 60e3 || ctx.forceCopy;
+    // GMGN smart-money + KOL (+ Fomo if keyed) — first tick immediate, ~15m ok / ~2m retry on empty
+    const copyStaleMs =
+      fomoCopy.STATS.fetched > 0 || fomoCopy.STATS.trackedCopy > 0 ? 15 * 60e3 : 2 * 60e3;
+    const needCopy =
+      !fomoCopy.STATS.lastRunAt ||
+      Date.now() - fomoCopy.STATS.lastRunAt > copyStaleMs ||
+      ctx.forceCopy;
     if (needCopy) {
       try {
         await fomoCopy.ingestCopyLeaders(state, { period: '7d', perTag: 28 });

@@ -1,0 +1,920 @@
+{
+  "fetchedAt": 1793665163925,
+  "period": "7d",
+  "note": "Fallback when GMGN blocks Render egress; refreshed from public API on box.",
+  "rows": [
+    {
+      "address": "9x6A5CFKKFXnAVQCXt8ocKggvfrNKJc7PPL9xYjzEE6n",
+      "rank": 1,
+      "pnl": 0.3812689381680722,
+      "winrate": 0.6,
+      "buys": 13,
+      "tags": [
+        "axiom",
+        "top_dev",
+        "smart_degen"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "D1ft36iYtPpF3GdR7V1fLsyw2QzuRKRe7r2zZWSVMUuF",
+      "rank": 2,
+      "pnl": 0.1546818477071654,
+      "winrate": 0.4289772727272727,
+      "buys": 581,
+      "tags": [
+        "axiom",
+        "smart_degen"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "7g5CJ754NboeY6D44MDdGwQmVX4Fvu59Q47c9ZKLPMkE",
+      "rank": 3,
+      "pnl": 0.0818922895117626,
+      "winrate": 0.43707093821510296,
+      "buys": 649,
+      "tags": [
+        "smart_degen"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "BoEVpctnMRtB7XhaJ99gNRGhP88HojtPvJ76BwX1gUwQ",
+      "rank": 3,
+      "pnl": 0.3545044857066477,
+      "winrate": 0.8875,
+      "buys": 269,
+      "tags": [
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "9ZaLTLU3uTWhMBTraNEqW9SwYYfTBshSSCAvJcN1rZRV",
+      "rank": 4,
+      "pnl": 0.1899225892195979,
+      "winrate": 0.3705179282868526,
+      "buys": 701,
+      "tags": [
+        "fresh_wallet",
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "BQVz7fQ1WsQmSTMY3umdPEPPTm1sdcBcX9sP7o6kPRmB",
+      "rank": 4,
+      "pnl": 0.1176902372133879,
+      "winrate": 0.4766146993318486,
+      "buys": 1825,
+      "tags": [
+        "kol",
+        "bullx",
+        "arbitrager",
+        "axiom",
+        "top_followed",
+        "top_renamed",
+        "padre"
+      ],
+      "name": "Limfork",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "8X5K7e8dpFCp5Eic31WGU2kLkP43T2pc2tR2bkdEwBLM",
+      "rank": 5,
+      "pnl": 0.1960594844334484,
+      "winrate": 0.34523809523809523,
+      "buys": 690,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "GeUnv1jmtviRbR7Gu1JnXSGkUMUgFVBHuEVQVpTaUX1W",
+      "rank": 5,
+      "pnl": 0.2853960035688769,
+      "winrate": 0.8131212723658051,
+      "buys": 556,
+      "tags": [
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "64QfrSZiBdDB7uFGfMoGEzjy3G6o2S46bEgveCyHdC68",
+      "rank": 6,
+      "pnl": 0.1760701606884623,
+      "winrate": 0.3031496062992126,
+      "buys": 702,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "EHg5YkU2SZBTvuT87rUsvxArGp3HLeye1fXaSDfuMyaf",
+      "rank": 6,
+      "pnl": 0.2028394110385424,
+      "winrate": 0.13793103448275862,
+      "buys": 319,
+      "tags": [
+        "photon",
+        "kol",
+        "app_smart_money",
+        "trojan",
+        "arbitrager",
+        "top_renamed",
+        "top_followed",
+        "axiom"
+      ],
+      "name": "til",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "FaBGrHWjcJ8vKnbgUtsdpZjvF7YAAajtQTWmmEHiKtQr",
+      "rank": 6,
+      "pnl": 0.5919243199293803,
+      "winrate": 0.8807339449541285,
+      "buys": 111,
+      "tags": [
+        "gmgn",
+        "padre",
+        "axiom",
+        "launchpad_smart"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "4BW3edXRXnXcqyCab576Vtt3qhg5Fm2WSXyRn3KVuurk",
+      "rank": 7,
+      "pnl": 0.1819689529258758,
+      "winrate": 0.3172690763052209,
+      "buys": 695,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "GM7Hrz2bDq33ezMtL6KGidSWZXMWgZ6qBuugkb5H8NvN",
+      "rank": 7,
+      "pnl": 0.3081578287662813,
+      "winrate": 0.35294117647058826,
+      "buys": 321,
+      "tags": [
+        "bullx",
+        "kol",
+        "padre",
+        "arbitrager",
+        "axiom"
+      ],
+      "name": "Beaver 🦁",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "AYEHKbGooTCishm755ArC88YZPJ29Rfh3b4q2hpyJPAQ",
+      "rank": 7,
+      "pnl": 0.2657608139706471,
+      "winrate": 0.865814696485623,
+      "buys": 338,
+      "tags": [
+        "bullx",
+        "photon",
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "8eR8bZyEMXpKye9B5ChiESe985zyovbRfdcLYV9dHTCN",
+      "rank": 8,
+      "pnl": 0.1612407680716683,
+      "winrate": 0.30039525691699603,
+      "buys": 706,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "Aqje5DsN4u2PHmQxGF9PKfpsDGwQRCBhWeLKHCFhSMXk",
+      "rank": 8,
+      "pnl": 0.2342881207622958,
+      "winrate": 0.8885245901639345,
+      "buys": 371,
+      "tags": [
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "EbSfgndn5J2WYPYziY1jEbVVk2FY5cwCXCS5tNf1Ckh5",
+      "rank": 9,
+      "pnl": 0.0328650882557917,
+      "winrate": 0.5323854660347551,
+      "buys": 975,
+      "tags": [
+        "fresh_wallet",
+        "smart_degen",
+        "gmgn"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "95ZCf3jKMHeFYvPXVZW3Ek6AEPDyjebosqnc7eNioVMo",
+      "rank": 9,
+      "pnl": 0.3416665282688202,
+      "winrate": 0.8278145695364238,
+      "buys": 146,
+      "tags": [
+        "padre",
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "7E4iMy954ZK1JNseXNofZPZ99d1KLXtNCHL2UtCNLtmv",
+      "rank": 10,
+      "pnl": 0.1091555905780403,
+      "winrate": 0.434640522875817,
+      "buys": 367,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "2heRyE1BUHUsMbPmJXD8C7A9R9DZvf6xktPumoghyp2e",
+      "rank": 11,
+      "pnl": 0.0814803016907527,
+      "winrate": 0.3273542600896861,
+      "buys": 419,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "ECMtCTbppi5QYLYf4UJuXRnu43op9cRPqdTqkPCfm9KG",
+      "rank": 12,
+      "pnl": 0.141244765059061,
+      "winrate": 0.3534136546184739,
+      "buys": 675,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "6veDGqZ8hMVEbs9c8HbHwijzpvLskUeRX78Pjsf7cM18",
+      "rank": 13,
+      "pnl": 0.1437485996651785,
+      "winrate": 0.336,
+      "buys": 690,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "DZAa55HwXgv5hStwaTEJGXZz1DhHejvpb7Yr762urXam",
+      "rank": 13,
+      "pnl": 0.4063062373413909,
+      "winrate": 0.43617021276595747,
+      "buys": 297,
+      "tags": [
+        "bullx",
+        "kol",
+        "axiom"
+      ],
+      "name": "ozark",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "BNtLMq78B75BEXNso1RcJ2pemgrSaxDEhZNxfDh3pgRY",
+      "rank": 13,
+      "pnl": 0.4018931911753706,
+      "winrate": 0.865979381443299,
+      "buys": 102,
+      "tags": [
+        "fresh_wallet",
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "GbSmnxESk1ZAWeZ2LJqnit6HfiF55UPTZxg3d5PnvDUY",
+      "rank": 14,
+      "pnl": 0.0979156812216006,
+      "winrate": 0.3951219512195122,
+      "buys": 255,
+      "tags": [
+        "smart_degen"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk",
+      "rank": 14,
+      "pnl": 0.1478332517606638,
+      "winrate": 0.5,
+      "buys": 274,
+      "tags": [
+        "kol",
+        "photon",
+        "arbitrager",
+        "top_followed",
+        "top_renamed",
+        "padre"
+      ],
+      "name": "jijo",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "2y5YnZhs9CzKQ5tUWjKjimrRsdrmRbrnxdqu9LWwgbmh",
+      "rank": 15,
+      "pnl": 0.0509750703949951,
+      "winrate": 0.4594594594594595,
+      "buys": 787,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "866SrsMfwKsErATZDCLAPbxH3NuqjKn7zQ1xXMqixoz1",
+      "rank": 15,
+      "pnl": 0.2505874357827901,
+      "winrate": 0.85,
+      "buys": 221,
+      "tags": [
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "FQpu9hW7C5p7irsXYRDHjtBKFc6ooNWni2TX1S6VHxRz",
+      "rank": 16,
+      "pnl": 0.639492391813366,
+      "winrate": 0.48148148148148145,
+      "buys": 54,
+      "tags": [
+        "fomo",
+        "smart_degen",
+        "padre"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "6S8GezkxYUfZy9JPtYnanbcZTMB87Wjt1qx3c6ELajKC",
+      "rank": 16,
+      "pnl": 0.0760322007042428,
+      "winrate": 0.4380952380952381,
+      "buys": 232,
+      "tags": [
+        "photon",
+        "kol",
+        "arbitrager",
+        "axiom",
+        "padre",
+        "top_followed",
+        "top_renamed"
+      ],
+      "name": "nyhrox",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "3gJVrzZP1c3263CMZ5or66weywPXNaDXhKTCrvm666jQ",
+      "rank": 16,
+      "pnl": 0.3213575502144646,
+      "winrate": 0.4077669902912621,
+      "buys": 101,
+      "tags": [
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "Cu1v2xPyriuXQ4r5dr8eszXorqEQBCY9cG6ceC9SSJHL",
+      "rank": 17,
+      "pnl": 0.0418862626975627,
+      "winrate": 0.33181818181818185,
+      "buys": 696,
+      "tags": [
+        "smart_degen"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "3ZDX6sSqzHDFFk7bViD26SsJxGLQVLUAzyqJJ5PVsxoo",
+      "rank": 18,
+      "pnl": 0.0608959059842261,
+      "winrate": 0.4119318181818182,
+      "buys": 356,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "EoNSkhQrCkFMqmFzCHBqKhRiAyhipc6Tgom6GX6PgPjc",
+      "rank": 19,
+      "pnl": 0.0654748710173951,
+      "winrate": 0.29411764705882354,
+      "buys": 414,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "VVV4C8wbLVU5Yw2JmdF7SPmoG2ubmJmmcjzHAJcdHgH",
+      "rank": 19,
+      "pnl": 0.1022593639874232,
+      "winrate": 0.34057971014492755,
+      "buys": 298,
+      "tags": [
+        "kol",
+        "gmgn_go",
+        "top_followed",
+        "gmgn"
+      ],
+      "name": "Cupsey",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "FHP3CH8AVyy4NgxjHwYTXJwx4eoXCrXzBBDnakgLTcAy",
+      "rank": 20,
+      "pnl": 0.420412365358871,
+      "winrate": 0.4,
+      "buys": 92,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "BtMBMPkoNbnLF9Xn552guQq528KKXcsNBNNBre3oaQtr",
+      "rank": 20,
+      "pnl": 0.0618436698113478,
+      "winrate": 0.3546511627906977,
+      "buys": 341,
+      "tags": [
+        "trojan",
+        "kol",
+        "app_smart_money",
+        "photon",
+        "arbitrager",
+        "gmgn_go",
+        "axiom",
+        "top_renamed",
+        "top_followed",
+        "gmgn"
+      ],
+      "name": "letterbomb",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "5ZuV8eqkvzYFVEKbLvGBdexL2tFv7E5BCd2HZpjqbdg",
+      "rank": 20,
+      "pnl": 0.0995715215804794,
+      "winrate": 0.6111111111111112,
+      "buys": 1159,
+      "tags": [
+        "gmgn",
+        "padre",
+        "gmgn_go",
+        "top_renamed",
+        "top_followed",
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "Doji",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "8FPehyhGQ9Kj59gmkwDLoohPNSZTmPrjNvpubpvf6RnW",
+      "rank": 21,
+      "pnl": 0.0883878920127437,
+      "winrate": 0.3466666666666667,
+      "buys": 426,
+      "tags": [
+        "smart_degen"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "8MoW9mtbEz6z3gPuAdYb1yWhjCAxQSYqpcTb1CQgN5qb",
+      "rank": 21,
+      "pnl": 0.1243356140834497,
+      "winrate": 0.29310344827586204,
+      "buys": 44,
+      "tags": [
+        "kol",
+        "gmgn_go",
+        "arbitrager",
+        "gmgn",
+        "top_followed",
+        "padre"
+      ],
+      "name": "Ashtoshii",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "CdPMDPxBkLZkj8FaU214mD8Mi3jvGhiZFqmsbgMyyfxA",
+      "rank": 22,
+      "pnl": 0.4132788275153379,
+      "winrate": 0.3582089552238806,
+      "buys": 71,
+      "tags": [
+        "fresh_wallet",
+        "padre",
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "J485YzQjuJPLYoFEYjrjxd7NAoLHTiyUU63JwK7kLxRr",
+      "rank": 22,
+      "pnl": 0.3654850387552761,
+      "winrate": 0.7058823529411765,
+      "buys": 25,
+      "tags": [
+        "kol",
+        "app_smart_money",
+        "axiom",
+        "arbitrager",
+        "top_renamed",
+        "top_followed",
+        "gmgn"
+      ],
+      "name": "金狗挖掘机 | 0xDavid",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "CRhRxa9xLGhtAztSnHTEk4ViqywvqU9tuU8zZbeU6oPt",
+      "rank": 23,
+      "pnl": 0.4052104614242564,
+      "winrate": 0.34328358208955223,
+      "buys": 71,
+      "tags": [
+        "fresh_wallet",
+        "padre",
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "AE4MPGvpMeCA7MwUakAxAQZTzcijPAXcFsoAQmtLrL4V",
+      "rank": 23,
+      "pnl": 0.0400899080843611,
+      "winrate": 0.5148514851485149,
+      "buys": 263,
+      "tags": [
+        "kol",
+        "gmgn_go",
+        "arbitrager",
+        "gmgn"
+      ],
+      "name": "fih 𓆝",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "DeA6zz7GcqWVvRi8YpHwszVCfREwf1p75xAw2ZXngEQr",
+      "rank": 24,
+      "pnl": 0.1620870644373918,
+      "winrate": 0.5714285714285714,
+      "buys": 19,
+      "tags": [
+        "gmgn_go",
+        "smart_degen",
+        "gmgn"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "9n3SRU1zgHV3ZSvZc5igYDLivwM7RyRAZarctU8vaM9j",
+      "rank": 24,
+      "pnl": 0.0657424442670232,
+      "winrate": 0.6666666666666666,
+      "buys": 23,
+      "tags": [
+        "kol",
+        "arbitrager"
+      ],
+      "name": "Mondoggg",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "CPd2SaTcVYeLRpdPmEGrFwzrmxsUNzmFTC5S7wgxsD3W",
+      "rank": 24,
+      "pnl": 0.9822062445514808,
+      "winrate": 0.7407407407407407,
+      "buys": 20,
+      "tags": [
+        "axiom",
+        "launchpad_smart"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "DUG4qZ1HZKQy9ik4wzHHUt47EKmykm44DmDoXRvhqBxb",
+      "rank": 25,
+      "pnl": 0.3742158939017456,
+      "winrate": 0.3283582089552239,
+      "buys": 71,
+      "tags": [
+        "fresh_wallet",
+        "padre",
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "5LCniWCFQFBqcPiZNf1VrRqt4qr73sqfzZHRCYcXS6VS",
+      "rank": 25,
+      "pnl": 0.1085083209859225,
+      "winrate": 0.2558139534883721,
+      "buys": 46,
+      "tags": [
+        "kol",
+        "gmgn_go",
+        "arbitrager",
+        "gmgn"
+      ],
+      "name": "Cowboy🔶BNB ｜版本之牛",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "2rWQnViNhDLUKan666PG2PCC59h8gWDH2zgqcdAEypTZ",
+      "rank": 25,
+      "pnl": 0.0609072456816905,
+      "winrate": 0.3135048231511254,
+      "buys": 757,
+      "tags": [
+        "launchpad_smart",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "5vpY5BaPC4Xw3F2uetiR8bZPrnu9BMBZ66QttM8hJqjD",
+      "rank": 26,
+      "pnl": 0.0223119431140947,
+      "winrate": 0.28225806451612906,
+      "buys": 1509,
+      "tags": [
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "BxpFcT9fkZwKHuvXPKcfxo6k5v28VJdzozXD2scAgsn",
+      "rank": 26,
+      "pnl": 2.038222490178003,
+      "winrate": 1,
+      "buys": 4,
+      "tags": [
+        "kol",
+        "gmgn_go",
+        "axiom",
+        "gmgn"
+      ],
+      "name": "Shenron 🐉",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    },
+    {
+      "address": "HknAF77XmCexsGxrxna74x14iB9uepeKE6dPbPdCJLhr",
+      "rank": 26,
+      "pnl": 0.2871568846575659,
+      "winrate": 0.8,
+      "buys": 107,
+      "tags": [
+        "launchpad_smart"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_money",
+      "wash": false
+    },
+    {
+      "address": "8YEwTSZPy7xTKKTKci4z4mVSRiDK4sDqAMYqr33QNekL",
+      "rank": 27,
+      "pnl": 0.0987934055673942,
+      "winrate": 0.625,
+      "buys": 35,
+      "tags": [
+        "fresh_wallet",
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "4WZsewdhjkL8NjqwyjhZRnswtyMmTaZ9DfwfFULy6Qwr",
+      "rank": 28,
+      "pnl": 0.3655438437882496,
+      "winrate": 0.31343283582089554,
+      "buys": 71,
+      "tags": [
+        "fresh_wallet",
+        "padre",
+        "smart_degen",
+        "axiom"
+      ],
+      "name": "",
+      "source": "gmgn-seed",
+      "board": "smart_degen",
+      "wash": false
+    },
+    {
+      "address": "9A4h17UgLGaVws6T1mBxzH5gkG35CUSrTfNgNK5Uj4Rp",
+      "rank": 28,
+      "pnl": 0.3003794723706716,
+      "winrate": 1,
+      "buys": 20,
+      "tags": [
+        "photon",
+        "kol",
+        "gmgn_go",
+        "axiom",
+        "arbitrager",
+        "gmgn"
+      ],
+      "name": "Cendol 岑铎",
+      "source": "gmgn-seed",
+      "board": "kol",
+      "wash": false
+    }
+  ]
+}
