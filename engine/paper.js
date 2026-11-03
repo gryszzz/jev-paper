@@ -651,6 +651,14 @@ function reconcileWealth(state) {
     corrected = true;
   }
 
+  // Poisoned journal from pre-fix sells (phantom hundreds/%)
+  const journal = Array.isArray(state.tradeJournal) ? state.tradeJournal : [];
+  const journalPnl = journal.reduce((s, t) => s + (Number(t && t.pnl) || 0), 0);
+  if (journal.length && (Math.abs(journalPnl - coherentRealized) > Math.max(30, start) || journal.some((t) => Math.abs(Number(t.pnl) || 0) > start * 2))) {
+    state.tradeJournal = [];
+    corrected = true;
+  }
+
   const expected = round(start + (Number(state.stats && state.stats.realizedPnl) || 0) + unrealized + (Number(state.solReserve) || 0), 4);
   // After reserve wipe, expected ≈ start + realized + unrealized; actual = working (+0 reserve)
   const actual = equity(state);
@@ -846,30 +854,26 @@ class PaperEngine {
     const inv = reconcileWealth(this.state);
     if (inv && inv.corrected) {
       console.warn('[jev] wealth reconciled', JSON.stringify(inv));
-    }
-    // Seed journal from recent closed activity if empty (no fake PnL — only logged sells)
-    if (!this.state.tradeJournal.length) {
-      for (const a of (this.state.activity || []).slice().reverse()) {
-        if (!a || !['sell', 'tp', 'stopped', 'whale_exit', 'time'].includes(a.type)) continue;
-        if (a.pnl == null) continue;
-        this.state.tradeJournal.push({
-          ts: a.ts || Date.now(),
-          symbol: a.symbol,
-          mint: a.mint,
-          pnl: Number(a.pnl) || 0,
-          pnlPct: Number(a.pnlPct) || 0,
-          lane: a.lane || null,
-          tradeMode: a.tradeMode || null,
-          abArm: a.abArm || null,
-          reason: a.type === 'stopped' ? 'stop' : a.type,
-          holdMs: 0,
-          signals: ['untagged'],
-          fullClose: true,
-          seeded: true,
-        });
+      // Drop poisoned journal / lane aggregates that carried phantom sell PnL
+      this.state.tradeJournal = [];
+      if (this.state.stats) {
+        const st = this.state.stats;
+        st.bestTrade = 0;
+        st.worstTrade = 0;
+        st.byLane = { FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } };
+        st.byMode = { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
+        st.byArm = null;
+        st.byStrategy = {};
+        st.wins = 0;
+        st.losses = 0;
+        st.trades = 0;
+        // realizedPnl already set by reconcileWealth to books-coherent value
       }
-      if (this.state.tradeJournal.length > 80) this.state.tradeJournal = this.state.tradeJournal.slice(-80);
+      // Strip sweep spam from feed (keep last non-sweep acts)
+      this.state.activity = (this.state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, 80);
     }
+    // Do NOT seed journal from historic activity — those rows may carry phantom PnL.
+    // Fresh closes append via paperSell → tradeJournal (source of truth for Stats).
     saveState(this.state, { immediate: true });
     try { await tradedLedger.flush(true); } catch (_) {}
     return this.state;
@@ -2943,22 +2947,28 @@ class PaperEngine {
         state.agents.analyst.weights = topWeights(state.signalWeights, 4);
         const holdMs = Math.max(0, now() - (Number(pos.openedAt) || now()));
         state.tradeJournal = state.tradeJournal || [];
-        state.tradeJournal.push({
-          ts: now(),
-          symbol: pos.symbol,
-          mint: pos.mint,
-          pnl,
-          pnlPct,
-          lane: pos.lane || null,
-          tradeMode: pos.tradeMode || null,
-          abArm: pos.abArm || null,
-          reason,
-          holdMs,
-          signals: tradeSignalsFromPos(pos),
-          fullClose: true,
-          amountUsd: basis,
-        });
-        if (state.tradeJournal.length > 200) state.tradeJournal = state.tradeJournal.slice(-200);
+        const sanePnl = Math.abs(pnl) <= Math.max((basis || 0) * 6, (state.startingBalance || 100) * 0.75)
+          && Math.abs(pnlPct) <= 350;
+        if (sanePnl) {
+          state.tradeJournal.push({
+            ts: now(),
+            symbol: pos.symbol,
+            mint: pos.mint,
+            pnl,
+            pnlPct,
+            lane: pos.lane || null,
+            tradeMode: pos.tradeMode || null,
+            abArm: pos.abArm || null,
+            reason,
+            holdMs,
+            signals: tradeSignalsFromPos(pos),
+            fullClose: true,
+            amountUsd: basis,
+          });
+          if (state.tradeJournal.length > 200) state.tradeJournal = state.tradeJournal.slice(-200);
+        } else {
+          console.warn('[jev] drop insane journal pnl', pos.symbol, pnl, pnlPct);
+        }
         if (reason === 'liq_shock' || reason === 'rug') {
           state.stats.rugStops = (state.stats.rugStops || 0) + 1;
         }
