@@ -185,7 +185,7 @@ class RealtimeFeed {
     // Cap hard so we never depend on a paid PumpPortal plan. Optional HELIUS free-tier WS
     // is used separately via startRpcWalletWatch for logsSubscribe/accountSubscribe.
     const pumpKey = process.env.PUMPPORTAL_API_KEY || '';
-    const freeCap = pumpKey || HELIUS_API_KEY ? 40 : 8; // free path: ≤8 tracked
+    const freeCap = pumpKey || HELIUS_API_KEY ? 40 : 16; // free path: prefer ≤16 copy wallets
     const tokens = [...this._tokenTradeSubs].slice(0, freeCap);
     const accounts = [...this._accountTradeSubs].slice(0, freeCap);
     try {

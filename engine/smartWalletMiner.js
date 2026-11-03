@@ -162,13 +162,16 @@ async function runMiner(state, ctx = {}) {
       // Cap RPC pressure — only every other mint per pass if many
       if (mints.indexOf(m) % 2 === 0) await mineTopHolders(reg, m, { limit: 5 });
     }
-    // Fomo / top-trader copy leaders (GMGN free; FomoRadar if keyed) — throttle ~15m
-    if (Date.now() - (fomoCopy.STATS.lastRunAt || 0) > 15 * 60e3 || ctx.forceCopy) {
+    // GMGN smart-money + KOL (+ Fomo if keyed) — first tick immediate, then ~15m
+    const needCopy = !fomoCopy.STATS.lastRunAt || Date.now() - fomoCopy.STATS.lastRunAt > 15 * 60e3 || ctx.forceCopy;
+    if (needCopy) {
       try {
-        await fomoCopy.ingestCopyLeaders(state, { period: '7d', limit: 35 });
+        await fomoCopy.ingestCopyLeaders(state, { period: '7d', perTag: 28 });
       } catch (e) {
         MINER.lastError = e.message;
       }
+    } else {
+      try { fomoCopy.pruneCopyWallets(ensureRegistry(state)); } catch (_) {}
     }
     // Cap registry size
     if ((reg.wallets || []).length > 120) {
@@ -205,7 +208,10 @@ function minerStats(state) {
         mined: !!w.mined,
         copy: !!w.copy,
         copySource: w.copySource || null,
+        copyBoard: w.copyBoard || null,
       })),
+    copyTracked: (reg.wallets || []).filter((w) => w.copy && !w.skipEntry).length,
+    copySignals: (reg.lastSignals || []).filter((s) => s && s.type === 'buy').slice(0, 8),
   };
 }
 

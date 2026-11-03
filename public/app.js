@@ -774,15 +774,25 @@
 
     const smEl = $('smartWalletStats');
     if (smEl) {
-      const top = (state.smartMoneyTop || (state.smartWalletMiner && state.smartWalletMiner.top) || []).slice(0, 6);
-      smEl.innerHTML = top.length
-        ? top
-            .map((w) => {
-              const addr = w.address || '';
-              return row(`${w.label || 'wallet'} · ${shortAddr(addr)}`, `sc ${Math.round(w.score || 0)}${w.copy ? ' · copy' : ''}`);
-            })
-            .join('')
-        : row('—', 'Miner idle');
+      const miner = state.smartWalletMiner || {};
+      const top = (state.smartMoneyTop || miner.top || []).slice(0, 6);
+      const tracked = state.copyTracked != null ? state.copyTracked : (miner.copyTracked || 0);
+      const copy = state.copyStats || miner.copy || {};
+      const sigs = (state.copySignals || miner.copySignals || []).slice(0, 4);
+      const head = [
+        row('Tracked copy', `${tracked} · src ${copy.source || '—'} · last ${copy.lastRunAt ? Math.round((Date.now()-copy.lastRunAt)/60000)+'m' : 'never'}`),
+        row('Boards', Object.entries(copy.tagsOk || {}).map(([k,v]) => `${k}:${v}`).join(' · ') || '—'),
+      ];
+      const body = top.length
+        ? top.map((w) => {
+            const addr = w.address || '';
+            return row(`${w.label || 'wallet'} · ${shortAddr(addr)}`, `sc ${Math.round(w.score || 0)}${w.copy ? ' · copy' : ''}${w.copyBoard ? ' · '+w.copyBoard : ''}`);
+          })
+        : [row('—', 'Miner idle')];
+      const sigRows = sigs.length
+        ? sigs.map((s) => row(`${s.type || 'sig'} · ${shortAddr(s.mint || '')}`, `${shortAddr(s.wallet || '')}${s.hits ? ' · x'+s.hits : ''}`))
+        : [row('Copy signals', 'waiting for WS buys')];
+      smEl.innerHTML = [...head, ...body, ...sigRows].join('');
     }
 
     const ww = state.whaleWatch || {};

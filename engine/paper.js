@@ -32,6 +32,7 @@ const {
 } = require('./smartMoney');
 const { tagCoin, updateHeatMap, exposureByNarrative, detectClusters, scoreNarrativeFit } = require('./narratives');
 const { runMiner, minerStats, feedbackFromPaper } = require('./smartWalletMiner');
+const { topCopyAddresses, copyStats } = require('./fomoCopy');
 const xbuzz = require('./xbuzz');
 const { latencyStats: rpcLatencyStats } = require('./rpc');
 const {
@@ -661,8 +662,8 @@ function reconcileWealth(state) {
 
   // Phantom equityHistory spikes (old reserve double-count) poison max-DD
   const hist = Array.isArray(state.equityHistory) ? state.equityHistory : [];
-  const ceil = Math.max(eq, start) * 2.5;
-  const floor = start * 0.15;
+  const ceil = Math.max(eq * 1.35, start * 1.8);
+  const floor = start * 0.25;
   const cleanHist = hist.filter((p) => {
     const e = Number(p && p.equity) || 0;
     return e >= floor && e <= ceil;
@@ -728,8 +729,8 @@ function buildTradeStats(state) {
   let maxDd = 0;
   const startBal = Number(state.startingBalance) || 100;
   const eqNow = Number(state.equity) || Number(state.workingEquity) || startBal;
-  const histCeil = Math.max(eqNow, startBal) * 2.5;
-  const histFloor = startBal * 0.15;
+  const histCeil = Math.max(eqNow * 1.35, startBal * 1.8);
+  const histFloor = startBal * 0.25;
   let peak = startBal;
   for (const pt of state.equityHistory || []) {
     const e = Number(pt.equity) || 0;
@@ -1005,6 +1006,9 @@ class PaperEngine {
       signalWeights: topWeights(s.signalWeights, 6),
       smartMoneyTop: (ensureRegistry(s).wallets || []).slice().sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,8),
       smartWalletMiner: minerStats(s),
+      copyStats: copyStats(),
+      copySignals: ((ensureRegistry(s).lastSignals) || []).slice(0, 12),
+      copyTracked: ((ensureRegistry(s).wallets) || []).filter((w) => w.copy && !w.skipEntry).length,
       xBuzz: xbuzz.stats(),
       viral: viral.stats(),
       catalyst: catalyst.stats(),
@@ -1042,7 +1046,7 @@ class PaperEngine {
           console.log('[jev] HELIUS_API_KEY detected — using Helius RPC');
         }
         const reg = ensureRegistry(this.state);
-        const tops = topAddresses(reg, 12);
+        const tops = topCopyAddresses(reg, 16);
         feed.watchAccountTrades(tops);
         try { feed.startRpcWalletWatch(tops); } catch (_) {}
         this._tradeUnsub = feed.onTrade((msg) => this._onRealtimeTrade(msg));
@@ -1052,7 +1056,7 @@ class PaperEngine {
       this.tickScan().catch((e) => console.error('scan', e.message));
       this.tickPrices().catch((e) => console.error('prices', e.message));
       this.tickWhales().catch((e) => console.error('whales', e.message));
-      this.tickMiner().catch((e) => console.error('miner', e.message));
+      this.tickMiner({ forceCopy: true }).catch((e) => console.error('miner', e.message));
       this._scanTimer = setInterval(() => {
         this.tickScan().catch((e) => console.error('scan', e.message));
       }, DEFAULTS.scanIntervalMs);
@@ -1095,7 +1099,7 @@ class PaperEngine {
     } catch (_) {}
   }
 
-  async tickMiner() {
+  async tickMiner(opts = {}) {
     const state = this.state;
     if (!state) return;
     const launches = realtimeLaunches();
@@ -1103,7 +1107,7 @@ class PaperEngine {
       ...((state.scanned || []).map((p) => p.mint)),
       ...((state.positions || []).map((p) => p.mint)),
     ].filter(Boolean);
-    await runMiner(state, { launches, mints: [...new Set(mints)].slice(0, 8) });
+    await runMiner(state, { launches, mints: [...new Set(mints)].slice(0, 8), forceCopy: !!opts.forceCopy });
     // X buzz: only top scored/open candidates (cashtag + short CA), 1 req/tick inside xbuzz
     const buzzTargets = [];
     const seenSym = new Set();
@@ -1136,7 +1140,7 @@ class PaperEngine {
     } catch (_) {}
     // refresh free RPC wallet watch with latest top wallets
     try {
-      const tops = topAddresses(ensureRegistry(state), 12);
+      const tops = topCopyAddresses(ensureRegistry(state), 16);
       feed.watchAccountTrades(tops);
       feed.startRpcWalletWatch(tops);
     } catch (_) {}
@@ -1189,16 +1193,45 @@ class PaperEngine {
       this.paperSell(pos, 'whale', detail, 1).catch(() => {});
     }
     if (smart && (side === 'buy' || side === 'buys') && !smart.skipEntry) {
-      pushSignal(reg, { type: 'buy', mint, wallet, symbol: msg.symbol });
+      pushSignal(reg, { type: 'buy', mint, wallet, symbol: msg.symbol, copy: !!smart.copy, board: smart.copyBoard || null });
       state.agents.whale.entrySignals = (state.agents.whale.entrySignals || 0) + 1;
       state.agents.whale.flash = 'entry';
       recordWalletEvent(reg, wallet, { side: 'buy' });
-      // Mark mint as smart-entry candidate for next scan
+      // Cluster: distinct tracked wallets buying same mint within window
+      const CLUSTER_MS = 8 * 60e3;
+      state._smartBuyCluster = state._smartBuyCluster || {};
+      const cl = state._smartBuyCluster[mint] || { wallets: {}, ts: now() };
+      // drop stale wallets
+      for (const w of Object.keys(cl.wallets)) {
+        if (now() - cl.wallets[w] > CLUSTER_MS) delete cl.wallets[w];
+      }
+      cl.wallets[wallet] = now();
+      cl.ts = now();
+      state._smartBuyCluster[mint] = cl;
+      const hits = Object.keys(cl.wallets).length;
+      const cluster = hits >= 2;
+      // Mark mint as smart-entry candidate for next scan (stronger when clustered)
       state._smartEntryMints = state._smartEntryMints || {};
-      state._smartEntryMints[mint] = { wallet, score: smart.score, ts: now() };
+      const prev = state._smartEntryMints[mint];
+      state._smartEntryMints[mint] = {
+        wallet,
+        score: smart.score,
+        ts: now(),
+        hits,
+        cluster,
+        copy: !!smart.copy,
+        wallets: Object.keys(cl.wallets),
+      };
+      if (cluster) {
+        state.agents.whale.copyClusters = (state.agents.whale.copyClusters || 0) + (prev && prev.cluster ? 0 : 1);
+        state.agents.whale.lastCluster = { mint, hits, wallets: Object.keys(cl.wallets).map((a) => a.slice(0, 6)), ts: now() };
+        pushSignal(reg, { type: 'cluster', mint, hits, wallets: Object.keys(cl.wallets), symbol: msg.symbol });
+      }
       state._whaleBuyEvents = state._whaleBuyEvents || [];
-      state._whaleBuyEvents.unshift({ mint, wallet, ts: now(), symbol: msg.symbol });
+      state._whaleBuyEvents.unshift({ mint, wallet, ts: now(), symbol: msg.symbol, copy: !!smart.copy, hits });
       if (state._whaleBuyEvents.length > 200) state._whaleBuyEvents = state._whaleBuyEvents.slice(0, 200);
+      // rolling outcome ring for prune (filled on paper close via feedback)
+      smart.recent = smart.recent || [];
     }
   }
 
@@ -2005,11 +2038,24 @@ class PaperEngine {
         if (r.blacklistDev && p.mint) {
           if (!state.ruggedDevs.includes(p.mint)) state.ruggedDevs.push(p.mint);
         }
-        // Smart-money entry boost
+        // Smart-money / copy entry boost — strong when ≥2 tracked wallets buy within minutes
         const se = state._smartEntryMints && state._smartEntryMints[p.mint];
         if (se && now() - se.ts < 15 * 60e3) {
-          r.score = Math.min(100, r.score + 8);
-          r.breakdown = [...(r.breakdown || []), { k: 'smartMoney', v: 8, note: 'WS buy signal' }];
+          const hits = Number(se.hits) || 1;
+          const cluster = !!se.cluster || hits >= 2;
+          const add = cluster ? Math.min(22, 14 + hits * 3) : (se.copy ? 10 : 8);
+          r.score = Math.min(100, r.score + add);
+          r.breakdown = [
+            ...(r.breakdown || []),
+            {
+              k: cluster ? 'copy_cluster' : 'smartMoney',
+              v: add,
+              note: cluster
+                ? `WS cluster ${hits} wallets${se.copy ? ' · copy' : ''}`
+                : (se.copy ? 'WS copy buy' : 'WS buy signal'),
+            },
+          ];
+          if (cluster) p.copyHit = true;
         }
         // Eyes + learned bonus
         if (p._eyesBoost) {
