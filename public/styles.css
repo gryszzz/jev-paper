@@ -599,3 +599,11 @@ body { min-height: 100dvh; }
 .lane-traction { color: #3dffa8; text-shadow: 0 0 8px #3dffa866; }
 .lane-fresh { color: #ff4fd8; }
 .lane-grad { color: #3dffa8; }
+
+.eyes-stats { margin: 8px 0 16px; }
+.eyes-table { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.eyes-row { display: grid; grid-template-columns: 1.6fr 0.6fr 0.6fr 1.2fr; gap: 6px; align-items: center; padding: 4px 8px; background: rgba(255,255,255,0.03); border-radius: 6px; }
+.eyes-label { opacity: 0.9; }
+.eyes-epm { text-align: right; font-variant-numeric: tabular-nums; }
+.eyes-age { opacity: 0.65; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eyes-row .warn { color: #f0c040; }

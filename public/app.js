@@ -768,8 +768,32 @@
         ['Catalyst', (state.catalyst && state.catalyst.mode) || '—', state.catalyst ? ((state.catalyst.matches || 0) + ' match') : '—'],
         ['Copy leaders', (state.smartWalletMiner && state.smartWalletMiner.copy && state.smartWalletMiner.copy.source) || '—', (state.smartWalletMiner && state.smartWalletMiner.copy) ? ((state.smartWalletMiner.copy.promoted || 0) + ' promo') : '—'],
         ['RPC', rt.rpcWsConnected ? 'up' : 'off', rpc.avgMs != null ? rpc.avgMs + 'ms' : '—'],
+        ['WalletWatch', (state.walletWatch && state.walletWatch.watching) ? ('watching ' + state.walletWatch.watching) : 'off', state.walletWatch && state.walletWatch.wsConnected ? 'ws' : 'poll'],
       ];
       latEl.innerHTML = rows.map(([a, b, c]) => row(a, `${b} · ${c}`)).join('');
+    }
+
+    const eyesH = (state.eyes && state.eyes.health) || {};
+    const eyesRows = (state.eyes && (state.eyes.sources || (eyesH.rows || []))) || [];
+    const eyesSum = $('eyesSummary');
+    if (eyesSum) {
+      eyesSum.innerHTML = [
+        row('Live / stale / down', `${eyesH.live || 0} / ${eyesH.stale || 0} / ${eyesH.down || 0}`),
+        row('Blocked / total', `${eyesH.blocked || 0} / ${eyesH.sources || eyesRows.length || 0}`),
+        row('Events / min', String(eyesH.epm || 0)),
+      ].join('');
+    }
+    const eyesEl = $('eyesStats');
+    if (eyesEl) {
+      const statusCls = (st) => ({ live: 'pos', stale: 'warn', down: 'neg', blocked: 'neg', idle: '' }[st] || '');
+      eyesEl.innerHTML = eyesRows.length
+        ? '<div class="eyes-table">' + eyesRows.map((r) => {
+            const epm = r.epm != null ? r.epm : 0;
+            const err = r.lastError ? ' · ' + String(r.lastError).slice(0, 40) : '';
+            const age = r.ageSec != null ? r.ageSec + 's' : '—';
+            return `<div class="eyes-row"><span class="eyes-label">${r.label || r.id}</span><strong class="${statusCls(r.status)}">${r.status}</strong><span class="eyes-epm">${epm}/min</span><span class="eyes-age">${age}${err}</span></div>`;
+          }).join('') + '</div>'
+        : row('Eyes', 'warming up…');
     }
 
     const smEl = $('smartWalletStats');

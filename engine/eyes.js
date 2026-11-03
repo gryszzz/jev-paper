@@ -348,6 +348,10 @@ async function jupiterPriceCheck(mints = []) {
 }
 
 function status(extra = {}) {
+  let health = extra.health || null;
+  try {
+    if (!health) health = require('./eyesHealth').summary();
+  } catch (_) {}
   return {
     pumpportal: realtimeStats(),
     xBuzz: xbuzz.stats(),
@@ -358,6 +362,8 @@ function status(extra = {}) {
     gecko: extra.gecko || null,
     telegram: extra.telegram || null,
     learn: extra.learn || null,
+    health,
+    sources: health && health.rows ? health.rows : [],
     liveEnabled: false,
     freeTier: true,
   };
