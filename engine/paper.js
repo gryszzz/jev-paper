@@ -48,6 +48,7 @@ const {
   isNewPairLane,
   exposureByLane,
   DEFAULT_LANE_CAPS,
+  DEFAULT_MOVER_SLOT_FRAC,
   LANE_DEFAULTS,
   classifyLane,
 } = require('./lanes');
@@ -292,7 +293,16 @@ function ensureLaneSettings(state) {
   if (s.maxMarketCapUsd == null) s.maxMarketCapUsd = DEFAULTS.maxMarketCapUsd;
   if (s.preferEarlyLanes == null) s.preferEarlyLanes = true;
   s.laneCaps = { ...DEFAULT_LANE_CAPS, ...(s.laneCaps || {}) };
+  // Tony 2026-11-02: force new-pair specialist caps (~80% SNIPE+TRACTION, MOVER ≤20%)
+  s.laneCaps.SNIPE = DEFAULT_LANE_CAPS.SNIPE;
+  s.laneCaps.TRACTION = DEFAULT_LANE_CAPS.TRACTION;
+  s.laneCaps.MOVER = Math.min(Number(s.laneCaps.MOVER) || DEFAULT_LANE_CAPS.MOVER, DEFAULT_LANE_CAPS.MOVER);
+  s.laneCaps.FRESH = DEFAULT_LANE_CAPS.FRESH;
+  s.laneCaps.GRAD = DEFAULT_LANE_CAPS.GRAD;
   s.lanes = { ...LANE_DEFAULTS, ...(s.lanes || {}) };
+  if (s.lanes) s.lanes.moverSlotFrac = Math.min(Number(s.lanes.moverSlotFrac) || DEFAULT_MOVER_SLOT_FRAC, DEFAULT_MOVER_SLOT_FRAC);
+  const mCap = moverSlotCap(s);
+  if (s.maxMoverPositions == null || Number(s.maxMoverPositions) > mCap) s.maxMoverPositions = mCap;
   state.stats = state.stats || emptyStats();
   state.stats.byLane = state.stats.byLane || emptyStats().byLane;
   for (const k of ['SNIPE', 'TRACTION', 'MOVER', 'FRESH', 'GRAD']) {
@@ -506,7 +516,8 @@ function migrateState(raw) {
         raw._dustActivityPruned = true;
       }
       if (raw.settings.preferNovelMints == null) raw.settings.preferNovelMints = true;
-      if (raw.settings.maxMoverPositions == null) raw.settings.maxMoverPositions = 1;
+      // Specialist: clamp MOVER slots to ≤20% (floor); do not keep legacy maxMover=2
+      raw.settings.maxMoverPositions = moverSlotCap(raw.settings);
       if (raw.settings.minEntryLiquidity == null) raw.settings.minEntryLiquidity = 15000;
       if (raw.settings.liqPullExitPct == null) raw.settings.liqPullExitPct = 0.5;
       if ((raw.settings.minLiquidity || 0) < 15000) raw.settings.minLiquidity = 15000;
@@ -2147,7 +2158,7 @@ class PaperEngine {
 
       const openMints = new Set(state.positions.map((p) => p.mint));
       const eqNow = equity(state);
-      const moverOpen = state.positions.filter((x) => (x.lane || LANE.MOVER) === LANE.MOVER).length;
+      const moverOpen = state.positions.filter((x) => canonicalLane(x.lane) === LANE.MOVER).length;
       const maxMover = Math.min(moverSlotCap(settings), settings.maxMoverPositions != null ? settings.maxMoverPositions : 99);
       const candidates = scored.filter((p) => {
         if (!p.pass || openMints.has(p.mint)) return false;
