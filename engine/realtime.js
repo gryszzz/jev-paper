@@ -78,7 +78,9 @@ class RealtimeFeed {
     this._flushSubs();
   }
 
-  watchAccountTrades(wallets = []) {
+  watchAccountTrades(wallets = [], { replace = true } = {}) {
+    // Prefer current top-copy list under freeCap — do not let stale seeds crowd them out.
+    if (replace) this._accountTradeSubs.clear();
     for (const w of wallets) if (w) this._accountTradeSubs.add(w);
     this._flushSubs();
   }
@@ -109,6 +111,8 @@ class RealtimeFeed {
         rpcWs: this._stats.rpcWsConnected,
         heliusOptional: !!HELIUS_API_KEY,
       },
+      accountTradeSubs: this._accountTradeSubs.size,
+      accountTradeSample: [...this._accountTradeSubs].slice(0, 4).map((a) => String(a).slice(0, 8)),
     };
   }
 
