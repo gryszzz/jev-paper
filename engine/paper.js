@@ -659,6 +659,19 @@ function reconcileWealth(state) {
     corrected = true;
   }
 
+  // Phantom equityHistory spikes (old reserve double-count) poison max-DD
+  const hist = Array.isArray(state.equityHistory) ? state.equityHistory : [];
+  const ceil = Math.max(eq, start) * 2.5;
+  const floor = start * 0.15;
+  const cleanHist = hist.filter((p) => {
+    const e = Number(p && p.equity) || 0;
+    return e >= floor && e <= ceil;
+  });
+  if (cleanHist.length !== hist.length) {
+    state.equityHistory = cleanHist.length ? cleanHist : [{ t: Date.now(), equity: eq }];
+    corrected = true;
+  }
+
   const expected = round(start + (Number(state.stats && state.stats.realizedPnl) || 0) + unrealized + (Number(state.solReserve) || 0), 4);
   // After reserve wipe, expected ≈ start + realized + unrealized; actual = working (+0 reserve)
   const actual = equity(state);
@@ -711,11 +724,16 @@ function buildTradeStats(state) {
   const rugStops = closed.filter((t) => t.reason === 'liq_shock' || t.reason === 'rug' || /rug/i.test(t.reason || '')).length;
   const hardStops = closed.filter((t) => t.reason === 'stop' || t.reason === 'liq_shock').length;
 
-  // Max drawdown from equity history
+  // Max drawdown from equity history (ignore phantom spikes from old sweep bug)
   let maxDd = 0;
-  let peak = Number(state.startingBalance) || 100;
+  const startBal = Number(state.startingBalance) || 100;
+  const eqNow = Number(state.equity) || Number(state.workingEquity) || startBal;
+  const histCeil = Math.max(eqNow, startBal) * 2.5;
+  const histFloor = startBal * 0.15;
+  let peak = startBal;
   for (const pt of state.equityHistory || []) {
     const e = Number(pt.equity) || 0;
+    if (e < histFloor || e > histCeil) continue;
     if (e > peak) peak = e;
     if (peak > 0) maxDd = Math.max(maxDd, (peak - e) / peak);
   }
@@ -876,20 +894,28 @@ class PaperEngine {
     const inv = reconcileWealth(this.state);
     if (inv && inv.corrected) {
       console.warn('[jev] wealth reconciled', JSON.stringify(inv));
-      // Drop poisoned journal / lane aggregates that carried phantom sell PnL
-      this.state.tradeJournal = [];
-      if (this.state.stats) {
-        const st = this.state.stats;
-        st.bestTrade = 0;
-        st.worstTrade = 0;
-        st.byLane = { FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } };
-        st.byMode = { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
-        st.byArm = null;
-        st.byStrategy = {};
-        st.wins = 0;
-        st.losses = 0;
-        st.trades = 0;
-        // realizedPnl already set by reconcileWealth to books-coherent value
+      // Only wipe journal when it itself is still poisoned (not for equity-history scrub alone)
+      const start = Number(this.state.startingBalance) || 100;
+      const journal = Array.isArray(this.state.tradeJournal) ? this.state.tradeJournal : [];
+      const journalPnl = journal.reduce((s, t) => s + (Number(t && t.pnl) || 0), 0);
+      const journalPoison = journal.length && (
+        Math.abs(journalPnl - (Number(this.state.stats && this.state.stats.realizedPnl) || 0)) > Math.max(30, start)
+        || journal.some((t) => Math.abs(Number(t.pnl) || 0) > start * 2)
+      );
+      if (journalPoison) {
+        this.state.tradeJournal = [];
+        if (this.state.stats) {
+          const st = this.state.stats;
+          st.bestTrade = 0;
+          st.worstTrade = 0;
+          st.byLane = { FRESH: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, GRAD: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 }, MOVER: { trades: 0, buys: 0, pnl: 0, wins: 0, losses: 0 } };
+          st.byMode = { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
+          st.byArm = null;
+          st.byStrategy = {};
+          st.wins = 0;
+          st.losses = 0;
+          st.trades = 0;
+        }
       }
       // Strip sweep spam from feed (keep last non-sweep acts)
       this.state.activity = (this.state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, 80);
