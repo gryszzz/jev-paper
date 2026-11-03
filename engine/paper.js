@@ -33,6 +33,7 @@ const {
 const { tagCoin, updateHeatMap, exposureByNarrative, detectClusters, scoreNarrativeFit } = require('./narratives');
 const { runMiner, minerStats, feedbackFromPaper } = require('./smartWalletMiner');
 const { topCopyAddresses, copyStats } = require('./fomoCopy');
+const walletWatch = require('./walletWatch');
 const xbuzz = require('./xbuzz');
 const { latencyStats: rpcLatencyStats } = require('./rpc');
 const {
@@ -204,7 +205,7 @@ function ensureLiquidityFloor(settings = {}) {
 function defaultTimeStopMs(pos) {
   const lane = (pos && pos.lane) || 'MOVER';
   const mode = (pos && pos.tradeMode) || 'RIDE';
-  if (lane === 'SNIPE' || lane === 'FRESH' || mode === 'SCALP') return 6 * 60e3;
+  if (lane === 'SNIPE' || lane === 'FRESH' || mode === 'SCALP') return 4 * 60e3;
   if (mode === 'MOON') return 6 * 3600e3;
   return 45 * 60e3;
 }
@@ -555,7 +556,7 @@ function migrateState(raw) {
         const lane = pos.lane || 'MOVER';
         const mode = pos.tradeMode || 'RIDE';
         let ms = 45 * 60e3;
-        if (lane === 'SNIPE' || lane === 'FRESH' || mode === 'SCALP') ms = 6 * 60e3;
+        if (lane === 'SNIPE' || lane === 'FRESH' || mode === 'SCALP') ms = 4 * 60e3;
         else if (mode === 'MOON') ms = 6 * 3600e3;
         pos.timeStopAt = pos.openedAt + ms;
       }
@@ -1020,6 +1021,7 @@ class PaperEngine {
       smartWalletMiner: minerStats(s),
       copyStats: copyStats(),
       copySignals: ((ensureRegistry(s).lastSignals) || []).slice(0, 12),
+      walletWatch: walletWatch.stats(),
       copyTracked: ((ensureRegistry(s).wallets) || []).filter((w) => w.copy && !w.skipEntry).length,
       xBuzz: xbuzz.stats(),
       viral: viral.stats(),
@@ -1058,9 +1060,13 @@ class PaperEngine {
           console.log('[jev] HELIUS_API_KEY detected — using Helius RPC');
         }
         const reg = ensureRegistry(this.state);
-        const tops = topCopyAddresses(reg, 16);
+        const tops = topCopyAddresses(reg, 56);
         feed.watchAccountTrades(tops);
-        try { feed.startRpcWalletWatch(tops); } catch (_) {}
+        try { feed.startRpcWalletWatch(tops.slice(0, 24)); } catch (_) {}
+        try {
+          walletWatch.start(tops).then((st) => console.log('[jev] walletWatch', st.mode, 'n='+st.watching, 'ws='+st.wsConnected)).catch((e)=>console.warn('[jev] walletWatch', e.message));
+          this._wwUnsub = walletWatch.onTrade((msg) => this._onRealtimeTrade(msg));
+        } catch (e) { console.warn('[jev] walletWatch wire', e.message); }
         this._tradeUnsub = feed.onTrade((msg) => this._onRealtimeTrade(msg));
       } catch (e) {
         console.warn('[jev] realtime feed', e.message);
@@ -1107,6 +1113,8 @@ class PaperEngine {
     this._scanTimer = this._priceTimer = this._whaleTimer = this._minerTimer = this._learnTimer = this._viralTimer = this._catalystTimer = null;
     try {
       if (this._tradeUnsub) this._tradeUnsub();
+      if (this._wwUnsub) this._wwUnsub();
+      walletWatch.stop();
       feed.stop();
     } catch (_) {}
   }
@@ -1152,9 +1160,10 @@ class PaperEngine {
     } catch (_) {}
     // refresh free RPC wallet watch with latest top wallets
     try {
-      const tops = topCopyAddresses(ensureRegistry(state), 16);
+      const tops = topCopyAddresses(ensureRegistry(state), 56);
       feed.watchAccountTrades(tops);
-      feed.startRpcWalletWatch(tops);
+      feed.startRpcWalletWatch(tops.slice(0, 24));
+      walletWatch.refresh(tops).catch(() => {});
     } catch (_) {}
     this.persist();
     this.emit();
@@ -2448,7 +2457,7 @@ class PaperEngine {
     // Merge: arm/mode overrides lane for treatment; control keeps lane + settings
     const risk =
       arm.id === 'CONTROL'
-        ? { ...laneRisk, spikeExit: false, liquidityShockPct: 0.15, allowReentry: false }
+        ? { ...laneRisk, spikeExit: false, liquidityShockPct: 0.12, allowReentry: false, stopLossPct: Math.max(laneRisk.stopLossPct || -0.09, -0.09) }
         : {
             stopPct: modeRisk.stopPct,
             trailPct: modeRisk.trailPct,

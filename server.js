@@ -187,11 +187,20 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[jev] paper PWA on http://0.0.0.0:${PORT} · LIVE_ENABLED=${LIVE_ENABLED} (forced paper)`);
 });
 
-// Keep-alive self-ping (Render free spin-down)
-const KEEPALIVE = process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL;
+// Keep-alive self-ping — ONLY on free/sleeping plans.
+// Render Starter ($7) and above stay up 24/7; self-ping wastes CPU. Tony on Starter 2026-11-02.
+const RENDER_PLAN = (process.env.RENDER_SERVICE_PLAN || process.env.RENDER_PLAN || '').toLowerCase();
+const PAID_RENDER =
+  process.env.RENDER_KEEPALIVE === '0' ||
+  process.env.DISABLE_KEEPALIVE === '1' ||
+  /starter|standard|pro|0\.5c|1c-|2c-|4c-|8c-/.test(RENDER_PLAN);
+const KEEPALIVE = PAID_RENDER ? null : (process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL);
 if (KEEPALIVE) {
   const base = KEEPALIVE.replace(/\/$/, '');
+  console.log('[jev] keepalive enabled (free-tier) →', base);
   setInterval(() => {
     fetch(`${base}/api/health`).catch(() => {});
   }, 4 * 60e3);
+} else {
+  console.log('[jev] keepalive OFF (paid/Starter plan — no self-ping)');
 }

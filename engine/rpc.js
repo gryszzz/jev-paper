@@ -22,8 +22,8 @@ const PUBLIC_RPCS = [
 const WS_RPCS = [
   process.env.SOLANA_WS_URL,
   HELIUS_API_KEY ? `wss://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}` : null,
-  'wss://api.mainnet-beta.solana.com',
   'wss://solana-rpc.publicnode.com',
+  'wss://api.mainnet-beta.solana.com',
 ].filter(Boolean);
 
 const cache = new Map();
@@ -131,7 +131,7 @@ async function getSignaturesForAddress(address, { limit = 25 } = {}) {
 async function getTransaction(signature) {
   return rpcCall(
     'getTransaction',
-    [signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+    [signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 1 }],
     { ttlMs: 60000, key: `tx:${signature}` }
   );
 }

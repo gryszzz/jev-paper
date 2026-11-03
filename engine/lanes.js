@@ -35,24 +35,24 @@ const LANE_DEFAULTS = {
 
   // SNIPE (<2m)
   snipeMaxAgeMs: 2 * 60e3,
-  snipeMinLiq: 400,
+  snipeMinLiq: 800,
   snipeMaxLiq: 80_000,
   snipeMaxMcap: 250_000,
   snipeBuyPctMult: 0.4, // small size
-  snipeTimeStopMs: 6 * 60e3, // tight
-  snipeStopPct: -0.12,
+  snipeTimeStopMs: 4 * 60e3, // tighter after liq rugs
+  snipeStopPct: -0.09,
   snipeTrailPct: 0.12,
   snipeLadder: [
     { mult: 1.35, sellPct: 0.45 }, // first TP +35%
     { mult: 1.5, sellPct: 0.35 }, // +50%
     { mult: 2.2, sellPct: 0.2 },
   ],
-  snipeMinUniqueBuyers: 2,
-  snipeMinBuys: 3,
-  snipeMinVolume: 200,
-  snipeBurstBuyers: 5, // strong early buyer burst
+  snipeMinUniqueBuyers: 3,
+  snipeMinBuys: 5,
+  snipeMinVolume: 400,
+  snipeBurstBuyers: 6, // strong early buyer burst
   snipeRequireTrigger: true, // smart/whale OR burst
-  top10MaxPctSnipe: 28,
+  top10MaxPctSnipe: 22,
 
   // TRACTION (2–60m)
   tractionMinAgeMs: 2 * 60e3,
@@ -237,9 +237,15 @@ function laneGates(pair, laneInfo, settings = {}, rug = null) {
     if (rug) {
       if (rug.mintAuthority || rug.mintRenounced === false) return { ok: false, why: 'mint authority' };
       if (rug.freezeAuthority) return { ok: false, why: 'freeze authority' };
-      if (rug.bundled || (rug.bundlePct != null && rug.bundlePct >= 18)) return { ok: false, why: 'bundle%' };
-      if (rug.devPct != null && rug.devPct >= 12) return { ok: false, why: `dev ${Math.round(rug.devPct)}%` };
+      if (rug.bundled || (rug.bundlePct != null && rug.bundlePct >= 12)) return { ok: false, why: 'bundle%' };
+      if (rug.devPct != null && rug.devPct >= 8) return { ok: false, why: `dev ${Math.round(rug.devPct)}%` };
       if (rug.devRugged || rug.devDirty) return { ok: false, why: 'dirty dev' };
+      // Missing rug payload on SNIPE = soft-fail (FOMO/YAMI rugs lacked early rug veto)
+      if (lane === LANE.SNIPE && rug.checked === false) return { ok: false, why: 'rug unchecked' };
+    } else if (lane === LANE.SNIPE) {
+      // No rug object yet — require at least mint/freeze fields from pair
+      if (pair.mintAuthority || pair.freezeAuthority) return { ok: false, why: 'authority open' };
+      if (pair.rugChecked === false) return { ok: false, why: 'rug unchecked' };
     }
     if (pair.sniper && pair.sniper.bundled) return { ok: false, why: 'bundle cluster' };
     if (pair._freshReject || pair.freshQualityOk === false) {
@@ -251,7 +257,7 @@ function laneGates(pair, laneInfo, settings = {}, rug = null) {
     if (age != null && age >= cfg.snipeMaxAgeMs) return { ok: false, why: 'snipe too old' };
     if (liq > 0 && liq < Math.min(cfg.snipeMinLiq, 300) && !pair.fromPump) return { ok: false, why: 'snipe liq dust' };
     const top10 = (rug && (rug.top10Pct || rug.topHolderPct)) || pair.top10Pct;
-    if (top10 != null && top10 > Math.max(cfg.top10MaxPctSnipe || 28, 40)) {
+    if (top10 != null && top10 > (cfg.top10MaxPctSnipe || 22)) {
       return { ok: false, why: `top10 ${Math.round(top10)}%` };
     }
     const unique = Number(pair.uniqueBuyers || pair.buyersM5 || pair.buyers || 0) || 0;
