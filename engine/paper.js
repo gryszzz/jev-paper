@@ -406,6 +406,7 @@ function emptyState(settings = {}) {
     equityHistory: [{ t: now(), equity: starting }],
     positions: [],
     activity: [],
+    fillsLog: [],
     scanned: [],
     scored: [],
     seenMints: [],
@@ -570,6 +571,12 @@ function migrateState(raw) {
     raw.solReserve = Number(raw.solReserve) || 0;
     raw.lastSweepEquity = Number(raw.lastSweepEquity) || Number(raw.startingBalance) || DEFAULTS.startingBalance;
     raw.tradeJournal = Array.isArray(raw.tradeJournal) ? raw.tradeJournal : [];
+    raw.activity = Array.isArray(raw.activity) ? raw.activity : [];
+    raw.fillsLog = Array.isArray(raw.fillsLog) ? raw.fillsLog : [];
+    raw.seenMints = Array.isArray(raw.seenMints) ? raw.seenMints : [];
+    raw.banner = raw.banner && typeof raw.banner === 'object'
+      ? raw.banner
+      : { text: 'JEV paper · Mode: PAPER', icon: null, ts: now() };
     ensureWeights(raw);
     ensureRegistry(raw);
     raw.settings = {
@@ -895,8 +902,28 @@ function tradeSignalsFromPos(pos) {
 function addActivity(state, item) {
   // Never surface SOL sweeps in the feed
   if (item && item.type === 'sweep') return;
-  state.activity.unshift({ id: uid('act'), ts: now(), ...item });
+  if (!state) return;
+  if (!Array.isArray(state.activity)) state.activity = [];
+  const row = { id: uid('act'), ts: now(), ...item };
+  state.activity.unshift(row);
   if (state.activity.length > 60) state.activity = state.activity.slice(0, 60);
+  // Durable short fill log — survives accidental activity wipes; shown in snapshot
+  if (row.type === 'buy' || row.type === 'tp' || row.type === 'stopped' || row.type === 'sell' || row.type === 'whale_exit') {
+    if (!Array.isArray(state.fillsLog)) state.fillsLog = [];
+    state.fillsLog.unshift({
+      id: row.id,
+      ts: row.ts,
+      type: row.type,
+      symbol: row.symbol,
+      lane: row.lane || null,
+      amountUsd: row.amountUsd,
+      pnl: row.pnl,
+      pnlPct: row.pnlPct,
+      mint: row.mint,
+      detail: row.detail,
+    });
+    if (state.fillsLog.length > 40) state.fillsLog = state.fillsLog.slice(0, 40);
+  }
 }
 
 /** Bound ephemeral in-memory maps so 512MB Render stays healthy. */
@@ -1073,6 +1100,7 @@ class PaperEngine {
         lastPersistBytes: sh.lastPersistBytes,
         consecutiveFails: sh.consecutiveFails,
         circuitOpen: sh.circuitOpen,
+        circuitHalfOpen: !!sh.circuitHalfOpen,
         dbAvailable: sh.dbAvailable,
         diskOk: !!sh.diskOk,
         persistMode: sh.persistMode || 'disk+remote',
@@ -1114,6 +1142,7 @@ class PaperEngine {
       this.state.settings.maxMoverPositions = 0;
     }
     this.state.activity = (this.state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, 60);
+    this.state.fillsLog = Array.isArray(this.state.fillsLog) ? this.state.fillsLog.slice(0, 40) : [];
     // Correct phantom solReserve / poisoned cash from sweep bugs
     const inv = reconcileWealth(this.state);
     if (inv && inv.corrected) {
@@ -1201,7 +1230,8 @@ class PaperEngine {
       gainPct: round(gainPct, 2),
       multiplier: round(mult, 4),
       positions: s.positions,
-      activity: s.activity.slice(0, 60),
+      activity: Array.isArray(s.activity) ? s.activity.slice(0, 60) : [],
+      fillsLog: Array.isArray(s.fillsLog) ? s.fillsLog.slice(0, 40) : [],
       agents: s.agents,
       banner: s.banner,
       settings: s.settings,
@@ -2411,9 +2441,9 @@ class PaperEngine {
           }
         }
         const lane = canonicalLane(p.lane || LANE.MOVER);
-        // Cap MOVERs to ≤20% of slots; never starve when no SNIPE/TRACTION candidates
-        const newPairAvail = scored.some((x) => x.pass && isNewPairLane(x.lane) && !openMints.has(x.mint) && !tradedLedger.recentlyTraded(x.mint) && !state.seenMints.includes(x.mint));
-        const moverCap = newPairAvail ? maxMover : Math.max(maxMover, Math.min(1, settings.maxPositions || 3));
+        // Hard cap: maxMoverPositions===0 means ZERO movers, even when no SNIPE/TRACTION is available.
+        // (Old fallback Math.max(maxMover, 1) let 5STAR MOVER slip through.)
+        const moverCap = maxMover;
         if (lane === LANE.MOVER && moverOpen >= moverCap) {
           p.laneCapHit = true;
           return false;
@@ -2867,31 +2897,35 @@ class PaperEngine {
       feed.watchTokenTrades([pair.mint]);
     } catch (_) {}
 
-    bumpLaneStats(state.stats, lane, { isBuy: true });
-    bumpArmStats(state.stats, arm.id, { isBuy: true });
-    addActivity(state, {
-      type: 'buy',
-      symbol: pair.symbol,
-      icon: pair.icon,
-      agent: 'Executor',
-      detail: `${lane} · ${modeTag} · ${arm.id} · R${rScore} · ${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'}${pair.catalyst >= 10 ? ' · CATALYST' : ''}${pair.earlyTraction >= 8 ? ' · TRACTION' : ''}`,
-      catalyst: pair.catalyst || 0,
-      catalystNote: pair.catalystNote || null,
-      earlyTraction: pair.earlyTraction || 0,
-      amountUsd: spend,
-      pnl: null,
-      pnlPct: null,
-      mint: pair.mint,
-      lane,
-      abArm: arm.id,
-      tradeMode: modeTag,
-      runnerScore: rScore,
-    });
-    setBanner(
-      state,
-      `Bought ${pair.symbol} [${lane}/${modeTag}/${arm.id}] R${rScore} · $${spend.toFixed(2)} · PAPER`,
-      pair.icon
-    );
+    try { bumpLaneStats(state.stats, lane, { isBuy: true }); } catch (e) { console.warn('[jev] bumpLane buy', e.message); }
+    try { bumpArmStats(state.stats, arm.id, { isBuy: true }); } catch (e) { console.warn('[jev] bumpArm buy', e.message); }
+    try {
+      addActivity(state, {
+        type: 'buy',
+        symbol: pair.symbol,
+        icon: pair.icon,
+        agent: 'Executor',
+        detail: `${lane} · ${modeTag} · ${arm.id} · R${rScore} · ${round(frac * 100, 0)}% · ${fill.source || 'jito-sim'}${pair.catalyst >= 10 ? ' · CATALYST' : ''}${pair.earlyTraction >= 8 ? ' · TRACTION' : ''}`,
+        catalyst: pair.catalyst || 0,
+        catalystNote: pair.catalystNote || null,
+        earlyTraction: pair.earlyTraction || 0,
+        amountUsd: spend,
+        pnl: null,
+        pnlPct: null,
+        mint: pair.mint,
+        lane,
+        abArm: arm.id,
+        tradeMode: modeTag,
+        runnerScore: rScore,
+      });
+      setBanner(
+        state,
+        `Bought ${pair.symbol} [${lane}/${modeTag}/${arm.id}] R${rScore} · $${spend.toFixed(2)} · PAPER`,
+        pair.icon
+      );
+    } catch (e) {
+      console.warn('[jev] buy activity/banner', e.message);
+    }
 
     // seed whale watch immediately
     this.tickWhales().catch(() => {});
@@ -3311,8 +3345,8 @@ class PaperEngine {
       state.stats.byStrategy[sid].trades += 1;
       state.stats.byStrategy[sid].pnl = round(state.stats.byStrategy[sid].pnl + pnl, 4);
       if (pnl >= 0) state.stats.byStrategy[sid].wins += 1;
-      bumpLaneStats(state.stats, pos.lane || LANE.MOVER, { pnl, win: pnl >= 0 });
-      bumpArmStats(state.stats, pos.abArm || 'CONTROL', { pnl, win: pnl >= 0 });
+      try { bumpLaneStats(state.stats, pos.lane || LANE.MOVER, { pnl, win: pnl >= 0 }); } catch (e) { console.warn('[jev] bumpLane sell', e.message); }
+      try { bumpArmStats(state.stats, pos.abArm || 'CONTROL', { pnl, win: pnl >= 0 }); } catch (e) { console.warn('[jev] bumpArm sell', e.message); }
       const mt = pos.tradeMode || 'RIDE';
       state.stats.byMode = state.stats.byMode || {};
       state.stats.byMode[mt] = state.stats.byMode[mt] || { trades: 0, pnl: 0, wins: 0, losses: 0 };

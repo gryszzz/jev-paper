@@ -87,27 +87,61 @@ function slimStateForPersist(state) {
   const seenMints = Array.isArray(state.seenMints) ? state.seenMints.slice(-150) : [];
   const notifications = Array.isArray(state.notifications) ? state.notifications.slice(0, 20) : [];
 
-  // Positions: drop bulky nested quote blobs if present
+  // Positions: keep trading fields the engine actually uses (amountUsd/tokens/mark*).
+  // Prior slim mapped qty/costUsd/mark which never exist on live positions — restart
+  // then loaded hollow rows and broke marks / activity continuity.
   const positions = (state.positions || []).map((p) => {
     if (!p || typeof p !== 'object') return p;
-    const {
-      mint, symbol, name, entryPrice, mark, qty, costUsd, openedAt, lane, mode, arm,
-      peak, trailActive, tpHits, stopPct, features, xBuzz, source, pairAgeSec,
-      entryLiq, image, twitter, website, telegram, copyFrom, catalyst,
-    } = p;
     return {
-      mint, symbol, name, entryPrice, mark, qty, costUsd, openedAt, lane, mode, arm,
-      peak, trailActive, tpHits, stopPct,
-      features: features && typeof features === 'object'
-        ? {
-            score: features.score,
-            runnerScore: features.runnerScore,
-            liquidity: features.liquidity,
-            volume: features.volume,
-            buyers: features.buyers,
-          }
-        : undefined,
-      xBuzz, source, pairAgeSec, entryLiq, image, twitter, website, telegram, copyFrom, catalyst,
+      id: p.id,
+      mint: p.mint,
+      symbol: p.symbol,
+      name: p.name,
+      icon: p.icon,
+      entryPrice: p.entryPrice,
+      amountUsd: p.amountUsd,
+      remainingUsdBasis: p.remainingUsdBasis != null ? p.remainingUsdBasis : p.amountUsd,
+      tokens: p.tokens,
+      tokensInitial: p.tokensInitial,
+      markPrice: p.markPrice,
+      markValue: p.markValue,
+      stopPrice: p.stopPrice,
+      trailPct: p.trailPct,
+      highSinceEntry: p.highSinceEntry,
+      trailStop: p.trailStop,
+      ladder: Array.isArray(p.ladder) ? p.ladder.slice(0, 8) : undefined,
+      trailRemainder: p.trailRemainder,
+      openedAt: p.openedAt,
+      timeStopAt: p.timeStopAt,
+      lane: p.lane,
+      score: p.score,
+      liquidity: p.liquidity,
+      entryLiquidity: p.entryLiquidity,
+      marketCap: p.marketCap,
+      dexId: p.dexId,
+      url: p.url,
+      pairAddress: p.pairAddress,
+      ageMs: p.ageMs,
+      bondingProgress: p.bondingProgress,
+      graduating: p.graduating,
+      narratives: Array.isArray(p.narratives) ? p.narratives.slice(0, 8) : undefined,
+      strategyId: p.strategyId,
+      runnerScore: p.runnerScore,
+      runnerBand: p.runnerBand,
+      abArm: p.abArm,
+      tradeMode: p.tradeMode,
+      modeLetter: p.modeLetter,
+      spikeExit: p.spikeExit,
+      spikeSellPct: p.spikeSellPct,
+      liquidityShockPct: p.liquidityShockPct,
+      allowReentry: p.allowReentry,
+      initialsAt2x: p.initialsAt2x,
+      initialsTaken: p.initialsTaken,
+      moonbagMinFrac: p.moonbagMinFrac,
+      reentries: p.reentries,
+      fillSource: p.fillSource,
+      // keep short price history only
+      priceHistory: Array.isArray(p.priceHistory) ? p.priceHistory.slice(-12) : undefined,
     };
   });
 
@@ -156,7 +190,7 @@ function slimStateForPersist(state) {
   }
 
   return {
-    version: state.version || 1,
+    version: state.version || 2,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt || now,
     cash: state.cash,
@@ -171,6 +205,7 @@ function slimStateForPersist(state) {
     settings: state.settings,
     positions,
     activity,
+    fillsLog: Array.isArray(state.fillsLog) ? state.fillsLog.slice(0, 40) : [],
     agents,
     banner: state.banner,
     stats: state.stats,
@@ -256,8 +291,8 @@ function ensureRemoteSyncLoop() {
     try {
       const st = circuit.state();
       // Probe / flush when circuit half-open or closed, and we have pending or never synced remote
-      if (st.open) return;
-      if (!_pending && health.lastRemotePersistOkAt > 0 && health.consecutiveFails === 0) return;
+      if (st.open) return; // wait for half-open window
+      if (!_pending && !st.halfOpen && health.lastRemotePersistOkAt > 0 && health.consecutiveFails === 0) return;
       if (Date.now() - _lastRemoteAttemptAt < 5000) return;
       _lastRemoteAttemptAt = Date.now();
       if (_pending) flushPending().catch(() => {});
@@ -313,16 +348,27 @@ async function flushPending() {
     const slim = slimStateForPersist(s);
     fileSave(slim); // disk mirror is also slim — keeps Render ephemeral disk small
     appendEquityHistory(s);
-    try {
-      await _doUpsert(slim);
-    } catch (e) {
-      health.consecutiveFails += 1;
-      health.lastPersistError = e.message || String(e);
-      health.circuitOpen = circuit.state().open;
-      console.warn('[store] supabase save', health.lastPersistError);
-      // Keep pending so next flush/retry can push
+    const cst = circuit.state();
+    // While fully open, skip remote (disk already saved). Half-open/closed → probe with backoff.
+    if (cst.open) {
+      health.circuitOpen = true;
+      health.lastPersistError = '[' + (cst.name || 'supabase-state') + '] circuit open';
       _pending = s;
       _pendingImmediate = wantImmediate || _pendingImmediate;
+    } else {
+      try {
+        await _doUpsert(slim);
+      } catch (e) {
+        const msg = e.message || String(e);
+        const isOpen = e.code === 'CIRCUIT_OPEN' || /circuit open/i.test(msg);
+        if (!isOpen) health.consecutiveFails += 1;
+        health.lastPersistError = msg;
+        health.circuitOpen = circuit.state().open;
+        console.warn('[store] supabase save', health.lastPersistError);
+        // Keep pending so half-open / sync loop can push
+        _pending = s;
+        _pendingImmediate = wantImmediate || _pendingImmediate;
+      }
     }
   } finally {
     _flushing = false;

@@ -300,7 +300,7 @@ function stats() {
     tokenHint: !tokenPresent
       ? 'missing X_BEARER_TOKEN'
       : !tokenShapeOk
-        ? 'wrong shape — paste App Bearer Token (Keys and tokens), not API Key/Client ID'
+        ? 'need OAuth 2.0 App-Only Bearer Token (Developer Portal → Project → App → Keys and tokens → Bearer Token). Not API Key, API Secret, Client ID, or Client Secret. Expect len≥80, often starts with AAAA'
         : (store.authFails >= 1 ? 'bearer rejected (401/403) — check project access + credits' : 'ok'),
     tickers: Object.keys(store.byTicker).length,
     top,
