@@ -121,7 +121,7 @@ const DEFAULTS = {
   liveWalletBalanceCapUsd: 200,
   abHarness: true,
   minRunnerScore: 40,
-  riskPerTradePct: 0.002, // 0.20% equity risk budget
+  riskPerTradePct: 0.01, // ~1% equity risk → ~8–15% size at typical stops
   mintCooldownMs: 45 * 60e3, // no re-entry after normal exit
   mintStopBlacklistMs: 24 * 3600e3, // after hard stop / liq shock
   dustUsd: 1.0, // force-close leftover dust to free slots
@@ -319,7 +319,7 @@ function ensureLaneSettings(state) {
   state.stats.byMode = state.stats.byMode || { SCALP: { trades: 0, pnl: 0, wins: 0, losses: 0 }, RIDE: { trades: 0, pnl: 0, wins: 0, losses: 0 }, MOON: { trades: 0, pnl: 0, wins: 0, losses: 0 } };
   if (s.abHarness == null) s.abHarness = true;
   if (s.minRunnerScore == null) s.minRunnerScore = 40;
-  if (s.riskPerTradePct == null) s.riskPerTradePct = 0.002;
+  if (s.riskPerTradePct == null || Number(s.riskPerTradePct) < 0.008) s.riskPerTradePct = 0.01;
   state.scalpWatch = state.scalpWatch || [];
   return state;
 }
@@ -1153,8 +1153,9 @@ class PaperEngine {
       this.state.settings.profitSweepPct = 0;
       this.state.settings.profitSweepTrigger = 999;
       this.state.settings.maxMoverPositions = 0;
-      this.state.settings.buyPctMin = Math.min(Number(this.state.settings.buyPctMin) || 0.08, 0.08);
-      this.state.settings.buyPctMax = Math.min(Number(this.state.settings.buyPctMax) || 0.15, 0.15);
+      this.state.settings.buyPctMin = 0.08;
+      this.state.settings.buyPctMax = 0.15;
+      this.state.settings.riskPerTradePct = Math.max(Number(this.state.settings.riskPerTradePct) || 0.01, 0.01);
     }
     this.state.solReserve = 0;
     this.state.stateEpoch = STATE_EPOCH;
@@ -2729,15 +2730,16 @@ class PaperEngine {
     frac *= laneSizeMult(lane, settings);
     frac *= arm.sizeMult != null ? arm.sizeMult : 1;
     if (pair.runnerAction && pair.runnerAction.sizeMult) frac *= pair.runnerAction.sizeMult;
-    // Playbook sizing: cap notional by riskPerTradePct / |stop|
+    // Small-account sizing: target 8–15% of equity, never exceed cash.
     const stopAbs = Math.abs(risk.stopPct != null ? risk.stopPct : settings.stopPct || 0.06);
-    const riskBudget = eq * (settings.riskPerTradePct || 0.002);
+    const riskBudget = eq * (settings.riskPerTradePct != null ? settings.riskPerTradePct : 0.01);
     const riskCapFrac = stopAbs > 0 ? riskBudget / (eq * stopAbs) : frac;
-    frac = Math.min(frac, Math.max(0.04, riskCapFrac));
-    // Tighten until expectancy proven
-    frac = Math.min(frac, settings.buyPctMax != null ? Math.min(settings.buyPctMax, 0.15) : 0.15);
+    frac = Math.min(frac, riskCapFrac > 0 ? riskCapFrac : frac);
+    const lo = settings.buyPctMin != null ? settings.buyPctMin : 0.08;
+    const hi = Math.min(settings.buyPctMax != null ? settings.buyPctMax : 0.15, 0.15);
+    frac = Math.max(lo, Math.min(hi, frac));
     let spend = round(eq * frac, 2);
-    spend = Math.min(spend, round(state.cash * 0.95, 2));
+    spend = Math.min(spend, round(state.cash * 0.95, 2)); // never exceed cash
     if (settings.liveMaxPerTradeUsd) spend = Math.min(spend, settings.liveMaxPerTradeUsd);
     if (spend < 2) return null;
 
