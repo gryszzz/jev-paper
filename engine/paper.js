@@ -1,6 +1,6 @@
 'use strict';
 
-const { loadState, saveState } = require('./store');
+const { loadState, saveState, flushPending, storeHealth } = require('./store');
 const tradedLedger = require('./tradedLedger');
 const { fetchJson, isBackingOff } = require('./http');
 const { createTradeAdapter } = require('./adapters');
@@ -106,8 +106,9 @@ const DEFAULTS = {
   lossStreakLimit: 3,
   lossStreakCooldownMs: 12 * 60e3,
   maxNarrativePct: 0.5,
+  profitSweepEnabled: false, // disabled — SOL sweeps clutter feed / phantom wealth
   profitSweepPct: 0.3,
-  profitSweepTrigger: 1.35, // equity / starting
+  profitSweepTrigger: 1.35, // equity / starting (unused when disabled)
   // Live safety caps (enforced even if LIVE_ENABLED flipped — LiveAdapter still stubs)
   liveMaxPerTradeUsd: 25,
   liveMaxDailySpendUsd: 100,
@@ -385,6 +386,7 @@ function emptyState(settings = {}) {
       lossStreakLimit: merged.lossStreakLimit ?? DEFAULTS.lossStreakLimit,
       lossStreakCooldownMs: merged.lossStreakCooldownMs ?? DEFAULTS.lossStreakCooldownMs,
       maxNarrativePct: merged.maxNarrativePct ?? DEFAULTS.maxNarrativePct,
+      profitSweepEnabled: false, // force off (ignore legacy true)
       profitSweepPct: merged.profitSweepPct ?? DEFAULTS.profitSweepPct,
       profitSweepTrigger: merged.profitSweepTrigger ?? DEFAULTS.profitSweepTrigger,
       abHarness: merged.abHarness != null ? merged.abHarness : DEFAULTS.abHarness,
@@ -394,7 +396,7 @@ function emptyState(settings = {}) {
       mintStopBlacklistMs: merged.mintStopBlacklistMs != null ? merged.mintStopBlacklistMs : DEFAULTS.mintStopBlacklistMs,
       dustUsd: merged.dustUsd != null ? merged.dustUsd : DEFAULTS.dustUsd,
       preferNovelMints: merged.preferNovelMints != null ? merged.preferNovelMints : DEFAULTS.preferNovelMints,
-      maxMoverPositions: merged.maxMoverPositions != null ? merged.maxMoverPositions : DEFAULTS.maxMoverPositions,
+      maxMoverPositions: 0, // force: never park capital in well-known movers
       liveMaxPerTradeUsd: DEFAULTS.liveMaxPerTradeUsd,
       liveMaxDailySpendUsd: DEFAULTS.liveMaxDailySpendUsd,
       liveMaxDailyLossUsd: DEFAULTS.liveMaxDailyLossUsd,
@@ -585,7 +587,10 @@ function migrateState(raw) {
   s.peakBalance = raw.peakBalance;
   s.positions = raw.positions || [];
   s.activity = raw.activity || [];
-  s.equityHistory = raw.equityHistory || s.equityHistory;
+  s.equityHistory = (raw.equityHistory || s.equityHistory || []).slice(-240);
+  if (Array.isArray(raw.seenMints) && raw.seenMints.length > 400) raw.seenMints = raw.seenMints.slice(-400);
+  if (Array.isArray(raw.activity)) raw.activity = raw.activity.filter((a) => a && a.type !== 'sweep').slice(0, 60);
+  if (Array.isArray(raw.tradeJournal) && raw.tradeJournal.length > 250) raw.tradeJournal = raw.tradeJournal.slice(-250);
   s.seenMints = raw.seenMints || [];
   s.createdAt = raw.createdAt || s.createdAt;
   return s;
@@ -627,15 +632,58 @@ function reconcileWealth(state) {
   const coherentRealized = round(working - start - unrealized, 4);
   let corrected = false;
 
-  // Phantom: many sweeps while reserve dwarfs working capital (old bug)
+  // Always wipe reserve when sweeps disabled / any residual phantom
   const sweeps = (state.stats && state.stats.sweeps) || 0;
-  if (reserve > 0 && (reserve > Math.max(working, start) || (sweeps >= 5 && reserve > start))) {
-    state.solReserve = 0;
-    if (state.stats) {
-      state.stats.sweeps = 0;
-      state.stats.sweptUsd = 0;
+  if (reserve > 0) {
+    // Return reserve cash only if books look coherent AND total isn't absurd; else drop
+    const absurd = working + reserve > start * 5;
+    if (absurd || sweeps > 0 || reserve > start) {
+      // Do NOT add reserve back into cash when wealth is poisoned — just zero it
+      if (!absurd && working <= start * 2 && sweeps === 0) {
+        state.cash = round((Number(state.cash) || 0) + reserve, 4);
+      }
+      state.solReserve = 0;
+      if (state.stats) {
+        state.stats.sweeps = 0;
+        state.stats.sweptUsd = 0;
+      }
+      corrected = true;
     }
-    corrected = true;
+  }
+
+  // Hard paper-book reset: cash/equity exploded without journal explaining it
+  {
+    const journal = Array.isArray(state.tradeJournal) ? state.tradeJournal : [];
+    const journalPnl = journal.reduce((a, t) => a + (Number(t && t.pnl) || 0), 0);
+    const eqNow = round((Number(state.cash) || 0) + positionMarks(state), 4);
+    const unexplained =
+      eqNow > start * 3 &&
+      (journal.length === 0 || Math.abs(journalPnl) < start) &&
+      Math.abs(eqNow - start) > start * 2;
+    if (unexplained || eqNow > start * 10) {
+      console.warn('[jev] hard wealth reset', { cash: state.cash, eqNow, start, journalLen: journal.length });
+      state.cash = start;
+      state.solReserve = 0;
+      state.peakBalance = start;
+      state.dayStartEquity = start;
+      state.dayRealizedPnl = 0;
+      state.lastSweepEquity = start;
+      state.positions = [];
+      state.equityHistory = [{ t: Date.now(), equity: start }];
+      state.activity = (state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, 40);
+      state.tradeJournal = [];
+      if (state.stats) {
+        state.stats.realizedPnl = 0;
+        state.stats.sweeps = 0;
+        state.stats.sweptUsd = 0;
+        state.stats.wins = 0;
+        state.stats.losses = 0;
+        state.stats.trades = 0;
+        state.stats.bestTrade = 0;
+        state.stats.worstTrade = 0;
+      }
+      corrected = true;
+    }
   }
 
   // Ratchet mark: never below start; at least current total so we don't re-sweep immediately
@@ -710,7 +758,7 @@ function pushEquity(state) {
   if (!last || last.equity !== eq || now() - last.t > 15000) {
     hist.push({ t: now(), equity: eq });
   }
-  if (hist.length > 2000) state.equityHistory = hist.slice(-2000);
+  if (hist.length > 240) state.equityHistory = hist.slice(-240);
   if (eq > state.peakBalance) {
     state.peakBalance = eq;
     state._newPeak = true;
@@ -845,8 +893,46 @@ function tradeSignalsFromPos(pos) {
 }
 
 function addActivity(state, item) {
+  // Never surface SOL sweeps in the feed
+  if (item && item.type === 'sweep') return;
   state.activity.unshift({ id: uid('act'), ts: now(), ...item });
-  if (state.activity.length > 250) state.activity = state.activity.slice(0, 250);
+  if (state.activity.length > 60) state.activity = state.activity.slice(0, 60);
+}
+
+/** Bound ephemeral in-memory maps so 512MB Render stays healthy. */
+function trimMemory(state) {
+  if (!state) return;
+  if (Array.isArray(state.equityHistory) && state.equityHistory.length > 240) {
+    state.equityHistory = state.equityHistory.slice(-240);
+  }
+  if (Array.isArray(state.tradeJournal) && state.tradeJournal.length > 250) {
+    state.tradeJournal = state.tradeJournal.slice(-250);
+  }
+  if (Array.isArray(state.activity) && state.activity.length > 60) {
+    state.activity = state.activity.filter((a) => a && a.type !== 'sweep').slice(0, 60);
+  }
+  if (Array.isArray(state.seenMints) && state.seenMints.length > 400) {
+    state.seenMints = state.seenMints.slice(-400);
+  }
+  if (Array.isArray(state.scanned) && state.scanned.length > 20) state.scanned = state.scanned.slice(0, 20);
+  if (Array.isArray(state.scored) && state.scored.length > 15) state.scored = state.scored.slice(0, 15);
+  if (Array.isArray(state.notifications) && state.notifications.length > 20) {
+    state.notifications = state.notifications.slice(0, 20);
+  }
+  // Drop stale cooldowns
+  const t = Date.now();
+  if (state.mintCooldown) {
+    for (const m of Object.keys(state.mintCooldown)) {
+      if (!state.mintCooldown[m] || (state.mintCooldown[m].until || 0) < t) delete state.mintCooldown[m];
+    }
+  }
+  // Cap heatMap keys
+  if (state.heatMap && typeof state.heatMap === 'object') {
+    const keys = Object.keys(state.heatMap);
+    if (keys.length > 40) {
+      for (const k of keys.slice(40)) delete state.heatMap[k];
+    }
+  }
 }
 
 function setBanner(state, text, icon = null) {
@@ -878,6 +964,109 @@ class PaperEngine {
       fallbackSlippage: DEFAULTS.slippage,
     });
     this._tradeUnsub = null;
+    this.heartbeat = {
+      lastMarketAt: 0,
+      lastPersistOkAt: 0,
+      lastCycleAt: 0,
+      lastScanAt: 0,
+      lastPriceAt: 0,
+      entriesHalted: false,
+      haltReason: null,
+      marketStaleMs: 90000,
+      startedAt: Date.now(),
+      memRssMb: 0,
+      memHeapMb: 0,
+    };
+    this._entriesHalted = false;
+    this._reconcileNeeded = false;
+  }
+
+  _touchMem() {
+    try {
+      const m = process.memoryUsage();
+      this.heartbeat.memRssMb = Math.round((m.rss / 1048576) * 10) / 10;
+      this.heartbeat.memHeapMb = Math.round((m.heapUsed / 1048576) * 10) / 10;
+    } catch (_) {}
+  }
+
+  /** Halt NEW entries when DB/market data unhealthy. Exits still allowed. */
+  refreshSafety() {
+    const hb = this.heartbeat;
+    this._touchMem();
+    const sh = storeHealth();
+    if (sh.lastPersistOkAt) hb.lastPersistOkAt = sh.lastPersistOkAt;
+    const nowTs = Date.now();
+    const marketAge = hb.lastMarketAt ? nowTs - hb.lastMarketAt : Infinity;
+    const persistAge = hb.lastPersistOkAt ? nowTs - hb.lastPersistOkAt : Infinity;
+    const dbDown = !sh.dbAvailable && sh.consecutiveFails >= 3;
+    const marketStale = marketAge > (hb.marketStaleMs || 90000);
+    const persistStale = persistAge > 5 * 60e3 && sh.consecutiveFails >= 2;
+    let halt = false;
+    let reason = null;
+    if (dbDown) { halt = true; reason = 'db-unavailable'; }
+    else if (marketStale && hb.lastMarketAt > 0) { halt = true; reason = 'market-stale'; }
+    else if (persistStale) { halt = true; reason = 'persist-stale'; }
+    if (halt && !this._entriesHalted) {
+      console.warn('[jev] entries HALTED:', reason);
+      this._reconcileNeeded = true;
+    }
+    if (!halt && this._entriesHalted && this._reconcileNeeded) {
+      // Resume only after wealth reconcile
+      try {
+        const inv = reconcileWealth(this.state);
+        console.log('[jev] resume reconcile', JSON.stringify(inv));
+        this._reconcileNeeded = false;
+      } catch (e) {
+        console.warn('[jev] resume reconcile failed', e.message);
+        halt = true;
+        reason = 'reconcile-failed';
+      }
+    }
+    this._entriesHalted = halt;
+    hb.entriesHalted = halt;
+    hb.haltReason = reason;
+    return { halt, reason };
+  }
+
+  health() {
+    this.refreshSafety();
+    const sh = storeHealth();
+    const hb = this.heartbeat;
+    const nowTs = Date.now();
+    const ok =
+      !this._entriesHalted &&
+      (hb.lastCycleAt > 0 ? nowTs - hb.lastCycleAt < 180000 : true) &&
+      (hb.memRssMb ? hb.memRssMb < 480 : true);
+    return {
+      ok,
+      paper: true,
+      mode: 'PAPER',
+      liveEnabled: false,
+      entriesHalted: !!this._entriesHalted,
+      haltReason: hb.haltReason,
+      heartbeat: {
+        lastMarketAt: hb.lastMarketAt,
+        lastPersistOkAt: hb.lastPersistOkAt || sh.lastPersistOkAt || 0,
+        lastCycleAt: hb.lastCycleAt,
+        lastScanAt: hb.lastScanAt,
+        lastPriceAt: hb.lastPriceAt,
+        marketAgeMs: hb.lastMarketAt ? nowTs - hb.lastMarketAt : null,
+        persistAgeMs: (hb.lastPersistOkAt || sh.lastPersistOkAt) ? nowTs - (hb.lastPersistOkAt || sh.lastPersistOkAt) : null,
+        cycleAgeMs: hb.lastCycleAt ? nowTs - hb.lastCycleAt : null,
+        memRssMb: hb.memRssMb,
+        memHeapMb: hb.memHeapMb,
+        uptimeSec: Math.round((nowTs - hb.startedAt) / 1000),
+      },
+      store: {
+        lastPersistBytes: sh.lastPersistBytes,
+        consecutiveFails: sh.consecutiveFails,
+        circuitOpen: sh.circuitOpen,
+        dbAvailable: sh.dbAvailable,
+        lastPersistError: sh.lastPersistError,
+      },
+      xBuzz: (() => { try { return xbuzz.stats(); } catch (_) { return null; } })(),
+      ts: nowTs,
+    };
   }
 
   async _init() {
@@ -904,7 +1093,13 @@ class PaperEngine {
     if (process.env.LIVE_ENABLED === 'true') {
       console.warn('[jev] LIVE_ENABLED=true ignored — paper only until LiveAdapter is completed');
     }
-    // Correct phantom solReserve from the old fixed-threshold sweep bug
+    // Force sweep off + mover cap every boot
+    if (this.state.settings) {
+      this.state.settings.profitSweepEnabled = false;
+      this.state.settings.maxMoverPositions = 0;
+    }
+    this.state.activity = (this.state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, 60);
+    // Correct phantom solReserve / poisoned cash from sweep bugs
     const inv = reconcileWealth(this.state);
     if (inv && inv.corrected) {
       console.warn('[jev] wealth reconciled', JSON.stringify(inv));
@@ -964,7 +1159,11 @@ class PaperEngine {
   persist(immediate = false) {
     if (!this.state) return;
     this.state.updatedAt = now();
-    saveState(this.state, { immediate });
+    trimMemory(this.state);
+    const p = saveState(this.state, { immediate });
+    const sh = storeHealth();
+    if (sh.lastPersistOkAt) this.heartbeat.lastPersistOkAt = sh.lastPersistOkAt;
+    return p;
   }
 
   snapshot() {
@@ -1042,8 +1241,12 @@ class PaperEngine {
         paidRequired: false,
       },
       realtime: realtimeStats(),
+      heartbeat: this.health().heartbeat,
+      entriesHalted: !!this._entriesHalted,
+      haltReason: this.heartbeat.haltReason,
+      storeHealth: storeHealth(),
       disclaimer:
-        'PAPER ONLY — Mode: PAPER. Eyes: PumpPortal+DexScreener+Gecko+Jupiter+X/Apify+Reddit/Trends+Telegram proxy. Learner nightly. LIVE_ENABLED=false.',
+        'PAPER ONLY — Mode: PAPER. Eyes: PumpPortal+DexScreener+Gecko+Jupiter+X/Apify+Reddit/Trends+Telegram proxy. Learner nightly. LIVE_ENABLED=false. Sweeps off.',
     };
   }
 
@@ -1368,6 +1571,8 @@ class PaperEngine {
     const state = this.state;
     if (!state || state._sweptThisTick) return false;
     const settings = state.settings;
+    // Disabled by default — SOL sweeps were fake/spammy on paper
+    if (settings.profitSweepEnabled !== true) return false;
     const trigger = settings.profitSweepTrigger || 1.35;
     const start = state.startingBalance || 100;
     const eq = equity(state); // includes reserve once
@@ -1569,6 +1774,8 @@ class PaperEngine {
     try {
       state._sweptThisTick = false;
       rolloverDay(state);
+      this.refreshSafety();
+      trimMemory(state);
       state.agents.scanner.status = 'scanning';
       state.agents.scanner.lastRun = now();
       this.emit();
@@ -2313,6 +2520,11 @@ class PaperEngine {
       this.maybeProfitSweep();
 
       pushEquity(state);
+      this.heartbeat.lastMarketAt = Date.now();
+      this.heartbeat.lastScanAt = this.heartbeat.lastMarketAt;
+      this.heartbeat.lastCycleAt = this.heartbeat.lastMarketAt;
+      this._touchMem();
+      trimMemory(state);
       this.persist();
       this.emit();
     } finally {
@@ -2325,6 +2537,14 @@ class PaperEngine {
     const settings = state.settings;
     if (state.killSwitch || !settings.running) {
       if (state.killSwitch) state.agents.risk.flash = 'block';
+      return null;
+    }
+    // Safety: no NEW entries when DB/market unhealthy (exits still run)
+    this.refreshSafety();
+    if (this._entriesHalted) {
+      state.agents.risk.status = 'halt';
+      state.agents.risk.flash = 'block';
+      state.agents.risk.lastAction = { symbol: '—', reason: this.heartbeat.haltReason || 'entries-halted' };
       return null;
     }
     if (state.positions.length >= settings.maxPositions) return null;
@@ -2662,7 +2882,8 @@ class PaperEngine {
     this.tickWhales().catch(() => {});
 
     pushEquity(state);
-    this.persist();
+    // Immediate Supabase flush — Render disk is ephemeral; debounce can lose fills on restart
+    this.persist(true);
     this.emit();
     setTimeout(() => {
       if (state.agents.executor.status === 'filled') {
@@ -2675,6 +2896,8 @@ class PaperEngine {
 
   async tickPrices() {
     await this._ready;
+    this.heartbeat.lastPriceAt = Date.now();
+    if (!this.heartbeat.lastMarketAt) this.heartbeat.lastMarketAt = this.heartbeat.lastPriceAt;
     const state = this.state;
     const watchMints = (state.scalpWatch || []).map((w) => w && w.mint).filter(Boolean);
     if (!state.positions.length && !watchMints.length) {
@@ -3109,7 +3332,7 @@ class PaperEngine {
             fullClose: true,
             amountUsd: basis,
           });
-          if (state.tradeJournal.length > 200) state.tradeJournal = state.tradeJournal.slice(-200);
+          if (state.tradeJournal.length > 250) state.tradeJournal = state.tradeJournal.slice(-250);
         } else {
           console.warn('[jev] drop insane journal pnl', pos.symbol, pnl, pnlPct);
         }
@@ -3191,7 +3414,8 @@ class PaperEngine {
     }
 
     pushEquity(state);
-    this.persist();
+    // Immediate Supabase flush so closed trades survive Render restarts
+    this.persist(true);
     this.emit();
     return { proceeds, pnl, pnlPct };
   }

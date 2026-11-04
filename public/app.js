@@ -600,7 +600,7 @@
   function renderActivity(targetId, limit) {
     const el = $(targetId);
     if (!el || !state) return;
-    const items = (state.activity || []).slice(0, limit);
+    const items = (state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, limit);
     if (!items.length) {
       el.innerHTML = '<div class="activity-empty">No activity yet</div>';
       return;
@@ -749,9 +749,18 @@
         row('Avg hold', holdLbl),
         row('Rug-stops', String(ts.rugStops || st.rugStops || 0)),
         row('Hard stops', String(ts.hardStops || 0)),
-        row('Reserve / sweeps', `${money(state.solReserve || 0)} · ${st.sweeps || 0}`),
         row('Learner', `v${learnVer} · ${learnStatus} · n=${L.labeled || 0}`),
         row('Books', inv.ok === false ? `drift ${money(inv.drift || 0)}` : 'invariant ok', inv.ok === false ? 'neg' : 'pos'),
+        (() => {
+          const hb = state.heartbeat || {};
+          const halted = state.entriesHalted;
+          const age = (ms) => ms == null ? '—' : (ms < 60000 ? Math.round(ms/1000)+'s' : Math.round(ms/60000)+'m');
+          return row(
+            'Heartbeat',
+            `cycle ${age(hb.cycleAgeMs)} · mkt ${age(hb.marketAgeMs)} · persist ${age(hb.persistAgeMs)} · rss ${hb.memRssMb || '—'}MB${halted ? ' · HALT '+(state.haltReason||'') : ''}`,
+            halted ? 'neg' : 'pos'
+          );
+        })(),
       ].join('');
     }
 
@@ -764,7 +773,7 @@
       const rpc = dl.rpc || {};
       const rows = [
         ['PumpPortal WS', rt.connected ? 'up' : 'down', rt.avgEventLatencyMs != null ? rt.avgEventLatencyMs + 'ms' : '—'],
-        ['X buzz', (state.xBuzz && state.xBuzz.mode) || 'stub', (state.xBuzz && state.xBuzz.authFails) ? ('auth-fail×' + state.xBuzz.authFails) : ((state.xBuzz && state.xBuzz.enabled) ? 'on' : 'off')],
+        ['X buzz', (state.xBuzz && state.xBuzz.mode) || 'stub', (state.xBuzz && state.xBuzz.tokenHint) ? state.xBuzz.tokenHint : ((state.xBuzz && state.xBuzz.authFails) ? ('auth-fail×' + state.xBuzz.authFails) : ((state.xBuzz && state.xBuzz.enabled) ? 'on' : 'off'))],
         ['Catalyst', (state.catalyst && state.catalyst.mode) || '—', state.catalyst ? ((state.catalyst.matches || 0) + ' match') : '—'],
         ['Copy leaders', (state.smartWalletMiner && state.smartWalletMiner.copy && state.smartWalletMiner.copy.source) || '—', (state.smartWalletMiner && state.smartWalletMiner.copy) ? ((state.smartWalletMiner.copy.promoted || 0) + ' promo') : '—'],
         ['RPC', rt.rpcWsConnected ? 'up' : 'off', rpc.avgMs != null ? rpc.avgMs + 'ms' : '—'],

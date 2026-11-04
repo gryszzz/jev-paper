@@ -180,7 +180,7 @@ function logCandidate(state, row) {
     earlyBuyers: row.earlyBuyers || [],
   };
   L.candidates.unshift(entry);
-  if (L.candidates.length > 800) L.candidates = L.candidates.slice(0, 800);
+  if (L.candidates.length > 200) L.candidates = L.candidates.slice(0, 200);
   L.stats.logged = (L.stats.logged || 0) + 1;
   appendJsonl({
     op: 'log',

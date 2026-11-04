@@ -83,17 +83,20 @@ app.use(
   })
 );
 
-app.get('/api/health', (_req, res) => {
-  res.json({
-    ok: true,
-    paper: true,
-    mode: 'PAPER',
-    liveEnabled: false,
-    envLiveFlag: LIVE_ENABLED,
-    auth: passcodeEnforced(),
-    authConfigured: !!APP_PASSCODE,
-    ts: Date.now(),
-  });
+app.get('/api/health', async (_req, res) => {
+  try {
+    const eng = await engine.ready();
+    const h = eng.health ? eng.health() : { ok: true };
+    const status = h.ok ? 200 : 503;
+    res.status(status).json({
+      ...h,
+      envLiveFlag: LIVE_ENABLED,
+      auth: passcodeEnforced(),
+      authConfigured: !!APP_PASSCODE,
+    });
+  } catch (e) {
+    res.status(503).json({ ok: false, error: e.message, ts: Date.now() });
+  }
 });
 
 app.get('/api/auth/status', (req, res) => {
@@ -182,6 +185,23 @@ app.get('*', (_req, res) => {
 });
 
 engine.start();
+
+// Flush paper state on Render restart / deploy so the last fills hit Supabase
+function _shutdownFlush(sig) {
+  console.log(`[jev] ${sig} — flushing paper state`);
+  try {
+    const { flushPending } = require('./engine/store');
+    const done = Promise.resolve(engine.persist ? engine.persist(true) : null).then(() => flushPending());
+    done.finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 4000).unref();
+  } catch (e) {
+    console.warn('[jev] shutdown flush', e && e.message);
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => _shutdownFlush('SIGTERM'));
+process.on('SIGINT', () => _shutdownFlush('SIGINT'));
+
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[jev] paper PWA on http://0.0.0.0:${PORT} · LIVE_ENABLED=${LIVE_ENABLED} (forced paper)`);

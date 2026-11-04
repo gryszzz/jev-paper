@@ -2,14 +2,16 @@ services:
   - type: web
     name: jev-paper
     runtime: node
-    plan: free
+    plan: starter
     region: oregon
     buildCommand: npm install --omit=dev
-    startCommand: npm start
+    startCommand: node --max-old-space-size=400 server.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=400"
       - key: LIVE_ENABLED
         value: "false"
       - key: SUPABASE_URL

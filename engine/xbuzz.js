@@ -15,6 +15,12 @@
 const { fetchJson } = require('./http');
 
 const X_BEARER = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
+// Real X API Bearer tokens are long JWTs (often start with AAAA...). Short opaque
+// strings (API Key / Client ID) produce HTTP 401 Unauthorized.
+if (X_BEARER && (X_BEARER.length < 80 || (!X_BEARER.startsWith('AAAA') && X_BEARER.split('.').length < 3))) {
+  console.warn('[xbuzz] X_BEARER_TOKEN looks wrong shape (len=' + X_BEARER.length + '). Need App Bearer Token from X developer portal → Keys and tokens, not API Key/Client ID.');
+}
+
 const APIFY_TOKEN = process.env.APIFY_TOKEN || '';
 const APIFY_ACTOR = process.env.APIFY_X_ACTOR || 'apidojo/tweet-scraper';
 const KOL_HANDLES = (process.env.X_KOL_HANDLES || 'elonmusk,a1lon9,solana,pumpdotfun,whale_alert,lookonchain,CryptoDonAlt,Ansem')
@@ -277,6 +283,8 @@ function stats() {
   const top = Object.values(store.byTicker)
     .sort((a, b) => (b.velocity || 0) - (a.velocity || 0))
     .slice(0, 12);
+  const tokenPresent = !!X_BEARER;
+  const tokenShapeOk = tokenPresent && X_BEARER.length >= 80 && (X_BEARER.startsWith('AAAA') || X_BEARER.split('.').length >= 3);
   return {
     enabled: store.enabled,
     mode: store.mode,
@@ -286,6 +294,14 @@ function stats() {
     apiCalls: store.apiCalls,
     signals: store.signals,
     authFails: store.authFails || 0,
+    tokenPresent,
+    tokenLen: tokenPresent ? X_BEARER.length : 0,
+    tokenShapeOk,
+    tokenHint: !tokenPresent
+      ? 'missing X_BEARER_TOKEN'
+      : !tokenShapeOk
+        ? 'wrong shape — paste App Bearer Token (Keys and tokens), not API Key/Client ID'
+        : (store.authFails >= 1 ? 'bearer rejected (401/403) — check project access + credits' : 'ok'),
     tickers: Object.keys(store.byTicker).length,
     top,
   };
