@@ -221,9 +221,41 @@ function slimStateForPersist(state) {
     signalWeights: state.signalWeights,
     smartMoney: state.smartMoney
       ? {
-          wallets: (state.smartMoney.wallets || []).slice(0, 80),
-          lastSignals: (state.smartMoney.lastSignals || []).slice(0, 20),
+          wallets: (state.smartMoney.wallets || []).slice(0, 80).map((w) => ({
+            address: w.address,
+            label: w.label,
+            rank: w.rank,
+            score: w.score,
+            buys: w.buys || 0,
+            sells: w.sells || 0,
+            wins: w.wins || 0,
+            losses: w.losses || 0,
+            copy: !!w.copy,
+            copySource: w.copySource || undefined,
+            copyBoard: w.copyBoard || undefined,
+            skipEntry: w.skipEntry || undefined,
+            mined: !!w.mined,
+            fwd7d: w.fwd7d,
+            buys7d: w.buys7d,
+            cold: w.cold || undefined,
+            rugRisk: w.rugRisk || undefined,
+            refreshAt: w.refreshAt || undefined,
+          })),
+          lastSignals: (state.smartMoney.lastSignals || []).slice(0, 12),
           updatedAt: state.smartMoney.updatedAt,
+          walletRefresh: state.smartMoney.walletRefresh
+            ? {
+                lastRefreshAt: state.smartMoney.walletRefresh.lastRefreshAt,
+                walletCount: state.smartMoney.walletRefresh.walletCount,
+                added: state.smartMoney.walletRefresh.added,
+                dropped: state.smartMoney.walletRefresh.dropped,
+                lastAdds: (state.smartMoney.walletRefresh.lastAdds || []).slice(0, 8),
+                lastDrops: (state.smartMoney.walletRefresh.lastDrops || []).slice(0, 8),
+                scored: state.smartMoney.walletRefresh.scored,
+                candidates: state.smartMoney.walletRefresh.candidates,
+                helius: !!state.smartMoney.walletRefresh.helius,
+              }
+            : undefined,
         }
       : undefined,
     // Explicitly omit: scored, scanned, whaleWatch, heatMap, full learn.candidates

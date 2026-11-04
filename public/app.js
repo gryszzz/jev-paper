@@ -775,7 +775,12 @@
         ['Catalyst', (state.catalyst && state.catalyst.mode) || '—', state.catalyst ? ((state.catalyst.matches || 0) + ' match') : '—'],
         ['Copy leaders', (state.smartWalletMiner && state.smartWalletMiner.copy && state.smartWalletMiner.copy.source) || '—', (state.smartWalletMiner && state.smartWalletMiner.copy) ? ((state.smartWalletMiner.copy.promoted || 0) + ' promo') : '—'],
         ['RPC', rt.rpcWsConnected ? 'up' : 'off', rpc.avgMs != null ? rpc.avgMs + 'ms' : '—'],
-        ['WalletWatch', (state.walletWatch && state.walletWatch.watching) ? ('watching ' + state.walletWatch.watching) : 'off', state.walletWatch && state.walletWatch.wsConnected ? 'ws' : 'poll'],
+        ['WalletWatch', (state.walletWatch && state.walletWatch.watching) ? ('watching ' + state.walletWatch.watching) : 'off', state.walletWatch && state.walletWatch.wsConnected ? (state.walletWatch.helius ? 'helius-ws' : 'ws') : 'poll'],
+        ['Wallet refresh', (state.walletListRefresh && state.walletListRefresh.walletCount != null) ? (state.walletListRefresh.walletCount + ' wallets') : '—', (function () {
+          const wr = state.walletListRefresh || (state.walletWatch && state.walletWatch.listRefresh) || {};
+          const age = wr.lastRefreshAt ? Math.round((Date.now() - wr.lastRefreshAt) / 60000) + 'm ago' : 'never';
+          return age + ' · +' + (wr.added || 0) + '/-' + (wr.dropped || 0);
+        })()],
       ];
       latEl.innerHTML = rows.map(([a, b, c]) => row(a, `${b} · ${c}`)).join('');
     }
@@ -810,8 +815,10 @@
       const tracked = state.copyTracked != null ? state.copyTracked : (miner.copyTracked || 0);
       const copy = state.copyStats || miner.copy || {};
       const sigs = (state.copySignals || miner.copySignals || []).slice(0, 4);
+      const wr = state.walletListRefresh || (state.walletWatch && state.walletWatch.listRefresh) || {};
       const head = [
         row('Tracked copy', `${tracked} · src ${copy.source || '—'} · last ${copy.lastRunAt ? Math.round((Date.now()-copy.lastRunAt)/60000)+'m' : 'never'}`),
+        row('Wallet list', `${wr.walletCount != null ? wr.walletCount : tracked} · refresh ${wr.lastRefreshAt ? Math.round((Date.now()-wr.lastRefreshAt)/60000)+'m ago' : 'never'} · +${wr.added||0}/-${wr.dropped||0}`),
         row('Boards', Object.entries(copy.tagsOk || {}).map(([k,v]) => `${k}:${v}`).join(' · ') || '—'),
       ];
       const body = top.length

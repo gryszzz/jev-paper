@@ -35,6 +35,7 @@ const STATS = {
   lastError: null,
   pollCycles: 0,
   wsNotifications: 0,
+  helius: !!(process.env.HELIUS_API_KEY),
 };
 
 let _handlers = new Set();
@@ -295,6 +296,12 @@ function openConn(url, wallets) {
 async function startWsShards(wallets) {
   closeConns();
   const endpoints = [...WS_RPCS];
+  // Prefer Helius WS when key present (already in WS_RPCS); put helius hosts first.
+  endpoints.sort((a, b) => {
+    const ah = /helius/i.test(a) ? 0 : 1;
+    const bh = /helius/i.test(b) ? 0 : 1;
+    return ah - bh;
+  });
   if (!endpoints.length) {
     // force at least publicnode
     endpoints.push('wss://solana-rpc.publicnode.com', 'wss://api.mainnet-beta.solana.com');
@@ -386,13 +393,34 @@ function refresh(wallets = []) {
   return start(next);
 }
 
+function dailyRefresh(state, opts) {
+  const { runDailyRefresh } = require('./walletListRefresh');
+  return runDailyRefresh(state, opts);
+}
+
+function listRefreshStats(state) {
+  const { refreshStats } = require('./walletListRefresh');
+  return refreshStats(state);
+}
+
+function needsListRefresh(state) {
+  const { needsRefresh } = require('./walletListRefresh');
+  return needsRefresh(state);
+}
+
 function stats() {
+  let list = null;
+  try {
+    list = listRefreshStats();
+  } catch (_) {}
   return {
     ...STATS,
+    helius: !!(process.env.HELIUS_API_KEY),
     wsEndpoints: (STATS.wsEndpoints || []).map(scrubUrl),
     nextWsHint: scrubUrl(STATS.nextWsHint || nextWs()),
     seen: _seenSigs.size,
     handlers: _handlers.size,
+    listRefresh: list,
   };
 }
 
@@ -402,6 +430,9 @@ module.exports = {
   refresh,
   onTrade,
   stats,
+  dailyRefresh,
+  listRefreshStats,
+  needsListRefresh,
   parseTradeFromTx, // test helper
   STATS,
 };

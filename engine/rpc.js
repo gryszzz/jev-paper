@@ -143,6 +143,43 @@ async function getTokenLargestAccounts(mint) {
   });
 }
 
+/**
+ * Helius enhanced transactions for an address (parsed swaps). Falls back to null
+ * when HELIUS_API_KEY is unset or the request fails — callers use free RPC.
+ * Never logs the API key.
+ */
+async function heliusEnhancedTransactions(address, { limit = 25, type = 'SWAP' } = {}) {
+  if (!HELIUS_API_KEY || !address) return null;
+  const qs = new URLSearchParams({
+    'api-key': HELIUS_API_KEY,
+    limit: String(Math.min(100, Math.max(1, limit))),
+  });
+  if (type) qs.set('type', type);
+  const url = `https://api.helius.xyz/v0/addresses/${address}/transactions?${qs}`;
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { Accept: 'application/json' },
+    });
+    const ms = Date.now() - t0;
+    if (!res.ok) {
+      markLatency(ms, false, 'helius-enhanced');
+      return null;
+    }
+    const data = await res.json();
+    markLatency(ms, true, 'helius-enhanced');
+    return Array.isArray(data) ? data : null;
+  } catch (_) {
+    markLatency(Date.now() - t0, false, 'helius-enhanced');
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 module.exports = {
   PUBLIC_RPCS,
   WS_RPCS,
@@ -153,5 +190,6 @@ module.exports = {
   getSignaturesForAddress,
   getTransaction,
   getTokenLargestAccounts,
+  heliusEnhancedTransactions,
   latencyStats,
 };

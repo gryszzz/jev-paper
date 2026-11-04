@@ -1291,6 +1291,7 @@ class PaperEngine {
       copyStats: copyStats(),
       copySignals: ((ensureRegistry(s).lastSignals) || []).slice(0, 12),
       walletWatch: walletWatch.stats(),
+      walletListRefresh: walletWatch.listRefreshStats(s),
       copyTracked: ((ensureRegistry(s).wallets) || []).filter((w) => w.copy && !w.skipEntry).length,
       xBuzz: xbuzz.stats(),
       viral: viral.stats(),
@@ -1347,7 +1348,7 @@ class PaperEngine {
       this.tickScan().catch((e) => console.error('scan', e.message));
       this.tickPrices().catch((e) => console.error('prices', e.message));
       this.tickWhales().catch((e) => console.error('whales', e.message));
-      this.tickMiner({ forceCopy: true }).catch((e) => console.error('miner', e.message));
+      this.tickMiner({ forceCopy: true, forceWalletRefresh: true }).catch((e) => console.error('miner', e.message));
       this._scanTimer = setInterval(() => {
         this.tickScan().catch((e) => console.error('scan', e.message));
       }, DEFAULTS.scanIntervalMs);
@@ -1401,6 +1402,31 @@ class PaperEngine {
       ...((state.positions || []).map((p) => p.mint)),
     ].filter(Boolean);
     await runMiner(state, { launches, mints: [...new Set(mints)].slice(0, 8), forceCopy: !!opts.forceCopy });
+    // Daily tracked-wallet list refresh (score 7d / drop cold-rug / mine runners)
+    try {
+      if (opts.forceWalletRefresh || walletWatch.needsListRefresh(state)) {
+        const wr = await walletWatch.dailyRefresh(state, { force: !!opts.forceWalletRefresh });
+        if (wr && !wr.skipped) {
+          console.log(
+            '[jev] walletListRefresh',
+            'n=' + wr.walletCount,
+            'added=' + wr.added,
+            'dropped=' + wr.dropped,
+            'scored=' + wr.scored,
+            'helius=' + !!wr.helius,
+            (wr.latencyMs != null ? wr.latencyMs + 'ms' : '')
+          );
+          addActivity(state, {
+            type: 'wallet',
+            symbol: '—',
+            agent: 'Whale',
+            detail: `Wallet list refresh · ${wr.walletCount} tracked · +${wr.added}/-${wr.dropped}`,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[jev] walletListRefresh', e.message);
+    }
     // X buzz: only top scored/open candidates (cashtag + short CA), 1 req/tick inside xbuzz
     const buzzTargets = [];
     const seenSym = new Set();
@@ -2319,6 +2345,30 @@ class PaperEngine {
             },
           ];
           if (cluster) p.copyHit = true;
+          // Extra boost: tracked wallet bought a NEW pair (<60m) that passes rug checks
+          const ageMs = p.ageMs != null ? p.ageMs : (p.pairCreatedAt ? now() - p.pairCreatedAt : null);
+          const rug = r.rug || p.rug || null;
+          const rugOk =
+            rug &&
+            rug.ok !== false &&
+            !rug.rugged &&
+            rug.mintRenounced !== false &&
+            !rug.freezeAuthority &&
+            !(rug.bundlePct != null && rug.bundlePct >= 12);
+          if (ageMs != null && ageMs < 60 * 60e3 && rugOk) {
+            const freshAdd = cluster ? 14 : 12;
+            r.score = Math.min(100, r.score + freshAdd);
+            r.breakdown = [
+              ...(r.breakdown || []),
+              {
+                k: 'tracked_fresh',
+                v: freshAdd,
+                note: `tracked buy · pair ${Math.round(ageMs / 60000)}m · rug ok`,
+              },
+            ];
+            p.copyHit = true;
+            p.trackedFreshBuy = true;
+          }
         }
         // Eyes + learned bonus
         if (p._eyesBoost) {
