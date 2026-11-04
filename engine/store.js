@@ -223,6 +223,8 @@ async function loadState() {
       health.lastLoadAt = Date.now();
       health.lastLoadOk = false;
       health.lastPersistError = e.message || String(e);
+      health.consecutiveFails += 1;
+      health.circuitOpen = circuit.state().open;
     }
   }
   const local = fileLoad();

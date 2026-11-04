@@ -7,6 +7,8 @@
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
+const { createCircuit } = require('./circuit');
+const ledgerCircuit = createCircuit({ name: 'supabase-ledger', failureThreshold: 3, openMs: 20000, maxOpenMs: 120000, timeoutMs: 8000 });
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const LEDGER_PATH = path.join(DATA_DIR, 'traded-mints.json');
@@ -57,8 +59,11 @@ async function load() {
   const sb = supabaseClient();
   if (sb) {
     try {
-      const { data, error } = await sb.from('jev_paper_state').select('state').eq('id', ROW_ID).maybeSingle();
-      if (error) throw error;
+      const data = await ledgerCircuit.withRetry(async () => {
+        const { data, error } = await sb.from('jev_paper_state').select('state').eq('id', ROW_ID).maybeSingle();
+        if (error) throw error;
+        return data;
+      }, { retries: 1, baseMs: 300 });
       if (data && data.state && data.state.mints) {
         _cache = { ...empty(), ...data.state };
         fileSave(_cache);
@@ -117,21 +122,19 @@ async function flush(immediate = false) {
   fileSave(_cache);
   const sb = supabaseClient();
   if (!sb) return;
-  const doUpsert = async () => {
-    try {
+  try {
+    await ledgerCircuit.withRetry(async () => {
       const { error } = await sb.from('jev_paper_state').upsert({
         id: ROW_ID,
         state: _cache,
         updated_at: new Date().toISOString(),
       });
       if (error) throw error;
-      _dirty = false;
-    } catch (e) {
-      console.warn('[tradedLedger] supabase save', e.message || e);
-    }
-  };
-  if (immediate) return doUpsert();
-  return doUpsert();
+    }, { retries: immediate ? 2 : 1, baseMs: 400 });
+    _dirty = false;
+  } catch (e) {
+    console.warn('[tradedLedger] supabase save', e.message || e);
+  }
 }
 
 function recordBuy(mint, meta = {}) {
