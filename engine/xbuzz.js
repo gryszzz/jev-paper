@@ -8,11 +8,12 @@
  *  3) Stub / manual ingest otherwise (disabled)
  * Feeds narrative heat + runnerScore narrative/X component.
  *
- * Free-tier discipline: at most ONE X counts request per tick, only for top
- * candidates (cashtag / short CA), with multi-minute cache.
+ * Credit discipline (~$30): ≤MAX_CALLS_PER_HOUR real network calls, one counts
+ * request per tick for top-N candidates only, 5m counts cache, KOL search ≤1/45m.
  */
 
-const { fetchJson } = require('./http');
+
+const { fetchJson, getCached } = require('./http');
 
 const X_BEARER = (() => {
   const direct = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
@@ -30,6 +31,11 @@ if (X_BEARER && (X_BEARER.length < 80 || (!X_BEARER.startsWith('AAAA') && X_BEAR
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN || '';
 const APIFY_ACTOR = process.env.APIFY_X_ACTOR || 'apidojo/tweet-scraper';
+// Frugal X credit budget (~$30): hard hourly cap + long cache + top-N only.
+const MAX_CALLS_PER_HOUR = Number(process.env.X_BUZZ_MAX_PER_HOUR || 24);
+const COUNT_CACHE_MS = Number(process.env.X_BUZZ_COUNT_CACHE_MS || 5 * 60e3); // 5 min
+const KOL_EVERY_MS = Number(process.env.X_BUZZ_KOL_EVERY_MS || 45 * 60e3); // 45 min
+const TOP_CANDIDATES = Number(process.env.X_BUZZ_TOP_N || 4);
 const KOL_HANDLES = (process.env.X_KOL_HANDLES || 'elonmusk,a1lon9,solana,pumpdotfun,whale_alert,lookonchain,CryptoDonAlt,Ansem')
   .split(',')
   .map((s) => s.trim().replace(/^@/, ''))
@@ -47,6 +53,8 @@ const store = {
   apiCalls: 0,
   signals: 0,
   authFails: 0,
+  callsWindow: [], // timestamps of real network calls (rolling 1h)
+  cacheHits: 0,
 };
 
 function clamp(n, a, b) {
@@ -145,20 +153,64 @@ function sanitizeTicker(t) {
 /**
  * One cashtag counts query. Cached ~3 minutes. Returns total recent count.
  */
+function pruneCallWindow(now = Date.now()) {
+  const cut = now - 3600e3;
+  store.callsWindow = (store.callsWindow || []).filter((t) => t >= cut);
+  return store.callsWindow.length;
+}
+
+function noteNetworkCall() {
+  const now = Date.now();
+  store.callsWindow = store.callsWindow || [];
+  store.callsWindow.push(now);
+  store.apiCalls += 1;
+  pruneCallWindow(now);
+}
+
+function underHourlyBudget() {
+  return pruneCallWindow() < MAX_CALLS_PER_HOUR;
+}
+
+function applyCountsPayload(tick, mint, d) {
+  const buckets = Array.isArray(d.data) ? d.data : [];
+  const total =
+    (d.meta && Number(d.meta.total_tweet_count)) ||
+    buckets.reduce((a, b) => a + (Number(b.tweet_count) || 0), 0);
+  const recent = buckets.slice(-2).reduce((a, b) => a + (Number(b.tweet_count) || 0), 0);
+  const mentions = Math.max(recent, Math.min(total, 40));
+  if (mentions > 0) {
+    ingestMentions({ symbol: tick, mint, mentions: Math.min(mentions, 25), ts: Date.now() });
+  } else {
+    ensure(tick).lastAt = Date.now();
+  }
+  return { symbol: tick, total, recent, mentions };
+}
+
 async function pollOneCashtag(symbol, mint) {
   if (!X_BEARER) return null;
   const tick = sanitizeTicker(symbol);
   if (!tick || tick.length < 2) return null;
-  // Prefer cashtag; optionally OR short CA prefix (min 6 chars) for contract chatter
   let q = `$${tick}`;
   const ca = mint && String(mint).length >= 8 ? String(mint).slice(0, 8) : null;
   if (ca) q = `($${tick} OR ${ca})`;
   q = `${q} -is:retweet lang:en`;
   const url = `https://api.twitter.com/2/tweets/counts/recent?query=${encodeURIComponent(q)}&granularity=hour`;
   const key = `x-counts-${tick}-${ca || 'x'}`;
+  const cached = getCached(key, COUNT_CACHE_MS);
+  if (cached) {
+    store.cacheHits = (store.cacheHits || 0) + 1;
+    store.lastRunAt = Date.now();
+    store.lastQuery = tick;
+    store.lastError = null;
+    return applyCountsPayload(tick, mint, cached);
+  }
+  if (!underHourlyBudget()) {
+    store.lastError = `hourly cap ${MAX_CALLS_PER_HOUR}`;
+    return null;
+  }
   try {
     const d = await fetchJson(url, {
-      ttlMs: 180000, // 3 min cache — free-tier friendly
+      ttlMs: COUNT_CACHE_MS,
       key,
       headers: { Authorization: `Bearer ${X_BEARER}` },
       timeoutMs: 12000,
@@ -166,21 +218,8 @@ async function pollOneCashtag(symbol, mint) {
     store.lastRunAt = Date.now();
     store.lastError = null;
     store.lastQuery = tick;
-    store.apiCalls += 1;
-    const buckets = Array.isArray(d.data) ? d.data : [];
-    const total =
-      (d.meta && Number(d.meta.total_tweet_count)) ||
-      buckets.reduce((a, b) => a + (Number(b.tweet_count) || 0), 0);
-    // Last 2 hour buckets ≈ "velocity" proxy
-    const recent = buckets.slice(-2).reduce((a, b) => a + (Number(b.tweet_count) || 0), 0);
-    const mentions = Math.max(recent, Math.min(total, 40));
-    if (mentions > 0) {
-      ingestMentions({ symbol: tick, mint, mentions: Math.min(mentions, 25), ts: Date.now() });
-    } else {
-      // still register ticker so UI shows we queried
-      ensure(tick).lastAt = Date.now();
-    }
-    return { symbol: tick, total, recent, mentions };
+    noteNetworkCall();
+    return applyCountsPayload(tick, mint, d);
   } catch (e) {
     store.lastError = e.message;
     store.lastRunAt = Date.now();
@@ -231,20 +270,24 @@ async function tickBuzz(symbols = []) {
   const items = (symbols || [])
     .map((s) => (typeof s === 'string' ? { symbol: s, mint: null } : s))
     .filter((s) => s && sanitizeTicker(s.symbol).length >= 2)
-    .slice(0, 8);
+    .slice(0, TOP_CANDIDATES);
   if (!items.length) return stats();
 
   const xAuthBroken = store.authFails >= 2;
   if (X_BEARER && !xAuthBroken) {
     const now = Date.now();
+    // Prefer stale tickers; skip if all fresh within COUNT_CACHE_MS
     let pick = items.find((it) => {
       const row = store.byTicker[sanitizeTicker(it.symbol).toUpperCase()];
-      return !row || !row.lastAt || now - row.lastAt > 180000;
+      return !row || !row.lastAt || now - row.lastAt > COUNT_CACHE_MS;
     });
-    if (!pick) pick = items[0];
-    await pollOneCashtag(pick.symbol, pick.mint);
-    // Also filtered KOL search once / 10m when bearer works
-    if (store.authFails < 1 && now - (store._kolAt || 0) > 600000) {
+    if (pick) await pollOneCashtag(pick.symbol, pick.mint);
+    // KOL filtered search rarely (credit saver)
+    if (
+      store.authFails < 1 &&
+      underHourlyBudget() &&
+      now - (store._kolAt || 0) > KOL_EVERY_MS
+    ) {
       store._kolAt = now;
       await pollKolFiltered().catch(() => {});
     }
@@ -261,17 +304,24 @@ async function tickBuzz(symbols = []) {
 /** Filtered search on watched KOL accounts (X API). */
 async function pollKolFiltered() {
   if (!X_BEARER || !KOL_HANDLES.length) return null;
-  const from = KOL_HANDLES.slice(0, 6).map((h) => `from:${h}`).join(' OR ');
+  if (!underHourlyBudget()) return null;
+  const from = KOL_HANDLES.slice(0, 4).map((h) => `from:${h}`).join(' OR ');
   const q = `(${from}) (coin OR solana OR pump OR meme) -is:retweet`;
   const url = `https://api.twitter.com/2/tweets/search/recent?max_results=10&query=${encodeURIComponent(q)}&tweet.fields=created_at,author_id,text`;
+  const key = 'x-kol-filtered';
+  const cached = getCached(key, KOL_EVERY_MS);
+  if (cached) {
+    store.cacheHits = (store.cacheHits || 0) + 1;
+    return cached.data || [];
+  }
   try {
     const d = await fetchJson(url, {
-      ttlMs: 120000,
-      key: 'x-kol-filtered',
+      ttlMs: KOL_EVERY_MS,
+      key,
       headers: { Authorization: `Bearer ${X_BEARER}` },
       timeoutMs: 12000,
     });
-    store.apiCalls += 1;
+    noteNetworkCall();
     store.lastError = null;
     for (const tw of d.data || []) {
       pushTweet({ text: tw.text, user: tw.author_id, ts: tw.created_at ? Date.parse(tw.created_at) : Date.now(), kol: true });
@@ -299,6 +349,9 @@ function stats() {
     lastError: store.lastError,
     lastQuery: store.lastQuery,
     apiCalls: store.apiCalls,
+    callsLastHour: pruneCallWindow(),
+    maxCallsPerHour: MAX_CALLS_PER_HOUR,
+    cacheHits: store.cacheHits || 0,
     signals: store.signals,
     authFails: store.authFails || 0,
     tokenPresent,

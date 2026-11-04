@@ -73,4 +73,11 @@ async function fetchJson(url, opts = {}) {
   }
 }
 
-module.exports = { fetchJson, isBackingOff };
+function getCached(key, ttlMs = 0) {
+  const hit = cache.get(key);
+  if (!hit) return undefined;
+  if (ttlMs > 0 && Date.now() - hit.ts >= ttlMs) return undefined;
+  return hit.data;
+}
+
+module.exports = { fetchJson, isBackingOff, getCached };

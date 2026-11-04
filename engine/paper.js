@@ -1436,7 +1436,7 @@ class PaperEngine {
       if (seenSym.has(k)) continue;
       seenSym.add(k);
       buzzTargets.push({ symbol: p.symbol, mint: p.mint || null });
-      if (buzzTargets.length >= 6) break;
+      if (buzzTargets.length >= 4) break;
     }
     try { await xbuzz.tickBuzz(buzzTargets); } catch (_) {}
     try {
