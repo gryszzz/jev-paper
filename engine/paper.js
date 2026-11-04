@@ -653,9 +653,9 @@ function reconcileWealth(state) {
   const unrealized = round(marks - cost, 4);
   const feesPaid = Number(state.stats && state.stats.feesPaidUsd) || 0;
   const realized = Number(state.stats && state.stats.realizedPnl) || 0;
-  // Invariant: equity = starting + realized + unrealized
-  // Fees are already netted into realized on each sell; feesPaid is display-only.
-  const expected = round(start + realized + unrealized, 4);
+  // Invariant: equity = starting + realized + unrealized - fees
+  // feesPaid = buy fees only; sell fees already netted into realized.
+  const expected = round(start + realized + unrealized - feesPaid, 4);
   const cash = Number(state.cash) || 0;
   const actual = round(cash + marks, 4);
   let corrected = false;
@@ -709,7 +709,7 @@ function reconcileWealth(state) {
   const unrealized2 = round(marks2 - cost2, 4);
   const realized2 = Number(state.stats && state.stats.realizedPnl) || 0;
   const fees2 = Number(state.stats && state.stats.feesPaidUsd) || 0;
-  const expected2 = round(start + realized2 + unrealized2, 4);
+  const expected2 = round(start + realized2 + unrealized2 - fees2, 4);
   const actual2 = round((Number(state.cash) || 0) + marks2, 4);
   const drift2 = round(actual2 - expected2, 4);
 
@@ -743,7 +743,7 @@ function reconcileWealth(state) {
     reserve: 0,
     corrected,
     reason,
-    formula: 'equity = starting + realizedPnl + unrealized (fees netted in realized)',
+    formula: 'equity = starting + realizedPnl + unrealized - feesPaid (buy fees; sell fees in realized)',
     ts: Date.now(),
   };
   return state._wealthInvariant;
@@ -2877,6 +2877,8 @@ class PaperEngine {
       buyersFlatSince: null,
     };
 
+    state.stats = state.stats || {};
+    state.stats.feesPaidUsd = round((Number(state.stats.feesPaidUsd) || 0) + feeUsd, 4);
     state.cash = round(state.cash - netSpend, 4);
     state.daySpend = round((state.daySpend || 0) + spend, 4);
     state.positions.push(pos);
@@ -3295,7 +3297,7 @@ class PaperEngine {
     const feeApplied = round(feeDrag * 0.25, 4);
     const pnl = round(proceeds - basis - feeApplied, 4);
     state.stats = state.stats || {};
-    state.stats.feesPaidUsd = round((Number(state.stats.feesPaidUsd) || 0) + feeApplied, 4);
+    // Buy fees live in feesPaidUsd; sell fees are already netted into realized pnl.
     let pnlPct = basis > 0 ? round((pnl / basis) * 100, 2) : 0;
     if (basis < dust || Math.abs(pnlPct) > 500) pnlPct = basis > 0 ? round((pnl / Math.max(basis, dust)) * 100, 2) : 0;
     const silentDust = reason === 'dust' || (proceeds < 0.05 && remBasis < dust * 2);
