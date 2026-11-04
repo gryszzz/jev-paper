@@ -128,33 +128,39 @@ class PaperAdapter extends TradeAdapter {
     const priorityFeeSol = simulateJitoFee({ urgency, liquidity: liq });
     const latencyMs = simulateLatencyMs({ liquidity: liq, urgency, lane });
 
-    if (this.jupiterQuote) {
+    // Paper fills are markPrice-authoritative. Jupiter decimals are often wrong for
+    // pump tokens (assumed 6), which inflated tokens → insane sell proceeds.
+    // Only blend Jupiter impact when effectivePrice is within 35% of mark.
+    if (this.jupiterQuote && markPrice > 0) {
       try {
         const q = await this.jupiterQuote({
           mint,
           side: 'buy',
           amountUsd: usd,
+          markPrice,
           slippageBps: Math.round(dynSlip * 10000),
         });
-        if (q && q.outAmount && q.inAmount) {
-          // Blend Jupiter impact with our dynamic floor so thin books stay realistic
-          const jupImpact = (Number(q.priceImpactPct) || 0) / 100;
-          const mev = simulateMevHazard({ liquidity: liq, amountUsd: usd, side: 'buy', lane, urgency });
-          const slip = Math.max(dynSlip, jupImpact) + mev.mevSlipExtra;
-          const fillPrice = (q.effectivePrice || markPrice) * (1 + Math.max(0, slip - jupImpact) * 0.5);
-          return {
-            source: 'jupiter+jito-sim',
-            fillPrice,
-            tokens: fillPrice > 0 ? usd / fillPrice : q.outAmountUi,
-            impactPct: slip * 100,
-            priorityFeeSol,
-            latencyMs: latencyMs + (mev.sandwiched ? 90 : 0),
-            route: q.routeLabel || 'jupiter',
-            jito: true,
-            dynSlippage: dynSlip,
-            mev,
-            failed: mev.failed,
-          };
+        if (q && q.outAmount && q.inAmount && q.effectivePrice > 0) {
+          const ratio = q.effectivePrice / markPrice;
+          if (ratio >= 0.65 && ratio <= 1.35) {
+            const jupImpact = (Number(q.priceImpactPct) || 0) / 100;
+            const mev = simulateMevHazard({ liquidity: liq, amountUsd: usd, side: 'buy', lane, urgency });
+            const slip = Math.max(dynSlip, jupImpact) + mev.mevSlipExtra;
+            const fillPrice = markPrice * (1 + slip);
+            return {
+              source: 'jupiter+jito-sim',
+              fillPrice,
+              tokens: fillPrice > 0 ? usd / fillPrice : 0,
+              impactPct: slip * 100,
+              priorityFeeSol,
+              latencyMs: latencyMs + (mev.sandwiched ? 90 : 0),
+              route: q.routeLabel || 'jupiter',
+              jito: true,
+              dynSlippage: dynSlip,
+              mev,
+              failed: mev.failed,
+            };
+          }
         }
       } catch (_) {}
     }
@@ -191,32 +197,38 @@ class PaperAdapter extends TradeAdapter {
     const priorityFeeSol = simulateJitoFee({ urgency, liquidity: liq });
     const latencyMs = simulateLatencyMs({ liquidity: liq, urgency, lane: opts.lane || null });
 
-    if (this.jupiterQuote) {
+    // Same as buy: markPrice is the fill truth. Cap Jupiter to impact-only when sane.
+    if (this.jupiterQuote && markPrice > 0 && tokens > 0) {
       try {
         const q = await this.jupiterQuote({
           mint,
           side: 'sell',
           tokenAmount: tokens,
+          markPrice,
           slippageBps: Math.round(dynSlip * 10000),
         });
-        if (q && q.outAmount) {
-          const jupImpact = (Number(q.priceImpactPct) || 0) / 100;
-          const mev = simulateMevHazard({ liquidity: liq, amountUsd: notional, side: 'sell', lane: opts.lane || null, urgency });
-          const slip = Math.max(dynSlip, jupImpact) + mev.mevSlipExtra;
-          const fillPrice = (q.effectivePrice || markPrice) * (1 - Math.max(0, slip - jupImpact) * 0.5);
-          return {
-            source: 'jupiter+jito-sim',
-            fillPrice,
-            proceedsUsd: tokens * fillPrice,
-            impactPct: slip * 100,
-            priorityFeeSol,
-            latencyMs: latencyMs + (mev.sandwiched ? 70 : 0),
-            route: q.routeLabel || 'jupiter',
-            jito: true,
-            dynSlippage: dynSlip,
-            mev,
-            failed: mev.failed,
-          };
+        if (q && q.outAmount && q.effectivePrice > 0) {
+          const ratio = q.effectivePrice / markPrice;
+          if (ratio >= 0.65 && ratio <= 1.35) {
+            const jupImpact = (Number(q.priceImpactPct) || 0) / 100;
+            const mev = simulateMevHazard({ liquidity: liq, amountUsd: notional, side: 'sell', lane: opts.lane || null, urgency });
+            const slip = Math.max(dynSlip, jupImpact) + mev.mevSlipExtra;
+            const fillPrice = markPrice * (1 - slip);
+            const proceedsUsd = tokens * fillPrice;
+            return {
+              source: 'jupiter+jito-sim',
+              fillPrice,
+              proceedsUsd,
+              impactPct: slip * 100,
+              priorityFeeSol,
+              latencyMs: latencyMs + (mev.sandwiched ? 70 : 0),
+              route: q.routeLabel || 'jupiter',
+              jito: true,
+              dynSlippage: dynSlip,
+              mev,
+              failed: mev.failed,
+            };
+          }
         }
       } catch (_) {}
     }

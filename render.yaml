@@ -14,6 +14,10 @@ services:
         value: "--max-old-space-size=400"
       - key: LIVE_ENABLED
         value: "false"
+      - key: JEV_STATE_ID
+        value: "paper-usd-100-v2"
+      - key: JEV_STATE_EPOCH
+        value: "usd-100-v2"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY

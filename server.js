@@ -190,6 +190,33 @@ app.post('/api/learning/refit', async (req, res) => {
   }
 });
 
+app.get('/api/stats', (_req, res) => {
+  try {
+    if (!engine.state) return res.status(503).json({ ok: false, booting: true });
+    const snap = engine.snapshot ? engine.snapshot() : {};
+    const inv = (engine.state && engine.state._wealthInvariant) || null;
+    res.json({
+      ok: true,
+      paper: true,
+      mode: 'PAPER',
+      startingBalance: snap.startingBalance,
+      cash: snap.cash,
+      equity: snap.equity,
+      realizedPnl: snap.stats && snap.stats.realizedPnl,
+      dayRealizedPnl: snap.dayRealizedPnl,
+      positions: Array.isArray(snap.positions) ? snap.positions.length : 0,
+      tradeStats: snap.tradeStats || null,
+      stats: snap.stats || null,
+      wealthInvariant: inv,
+      stateEpoch: snap.stateEpoch || null,
+      solReserve: 0,
+      ts: Date.now(),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('*', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

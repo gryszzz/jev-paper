@@ -183,7 +183,7 @@ const PRESETS = {
     minLiquidity: 15000,
     minScore: 52,
     buyPctMin: 0.08,
-    buyPctMax: 0.14,
+    buyPctMax: 0.15,
     maxPositions: 3,
     stopPct: -0.1,
     trailPct: 0.18,
@@ -266,7 +266,8 @@ function positionSizeFraction(score, settings, opts = {}) {
 
   if (opts.narrativeOverExposed) frac *= 0.5;
 
-  return Math.max(settings.buyPctMin * 0.5, Math.min(settings.buyPctMax, frac));
+  const hardMax = Math.min(settings.buyPctMax != null ? settings.buyPctMax : 0.15, 0.15);
+  return Math.max(settings.buyPctMin * 0.5, Math.min(hardMax, frac));
 }
 
 module.exports = { PRESETS, applyPreset, positionSizeFraction };

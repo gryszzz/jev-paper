@@ -18,7 +18,8 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const HISTORY_DIR = path.join(DATA_DIR, 'history');
 const EQUITY_JSONL = path.join(HISTORY_DIR, 'equity.jsonl');
-const ROW_ID = process.env.JEV_STATE_ID || 'default';
+const ROW_ID = process.env.JEV_STATE_ID || 'paper-usd-100-v2';
+const STATE_EPOCH = process.env.JEV_STATE_EPOCH || 'usd-100-v2';
 const DEBOUNCE_MS = Math.max(15000, Number(process.env.JEV_PERSIST_MS) || 45000);
 const MAX_EQUITY_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -198,7 +199,8 @@ function slimStateForPersist(state) {
     peakBalance: state.peakBalance,
     dayStartEquity: state.dayStartEquity,
     dayRealizedPnl: state.dayRealizedPnl,
-    solReserve: state.solReserve || 0,
+    solReserve: 0,
+    stateEpoch: state.stateEpoch || STATE_EPOCH,
     lastSweepEquity: state.lastSweepEquity,
     killSwitch: !!state.killSwitch,
     cooldownUntil: state.cooldownUntil || 0,
@@ -257,11 +259,22 @@ async function loadState() {
         return data;
       }, { retries: 1, baseMs: 300 });
       if (data && data.state && data.state.version) {
-        console.log('[store] loaded from supabase · bytes≈', JSON.stringify(data.state).length);
-        fileSave(data.state);
-        health.lastLoadAt = Date.now();
-        health.lastLoadOk = true;
-        return data.state;
+        const remote = data.state;
+        const start = Number(remote.startingBalance) || 100;
+        const marks = (remote.positions || []).reduce((sum, x) => sum + (Number(x && x.markValue) || Number(x && x.amountUsd) || 0), 0);
+        const eq = (Number(remote.cash) || 0) + marks;
+        const epochOk = remote.stateEpoch === STATE_EPOCH;
+        const poison = !epochOk || eq > start * 3 || (Number(remote.solReserve) || 0) > start || Math.abs(Number(remote.stats && remote.stats.realizedPnl) || 0) > start * 5;
+        if (poison) {
+          console.warn('[store] REJECT poisoned remote state', { id: ROW_ID, eq, cash: remote.cash, epoch: remote.stateEpoch, want: STATE_EPOCH });
+          // fall through to disk / fresh — do not write poison onto disk
+        } else {
+          console.log('[store] loaded from supabase · bytes≈', JSON.stringify(remote).length);
+          fileSave(remote);
+          health.lastLoadAt = Date.now();
+          health.lastLoadOk = true;
+          return remote;
+        }
       }
     } catch (e) {
       console.warn('[store] supabase load', e.message || e);
@@ -274,6 +287,17 @@ async function loadState() {
   }
   const local = fileLoad();
   health.lastLoadAt = Date.now();
+  if (local && local.version) {
+    const start = Number(local.startingBalance) || 100;
+    const marks = (local.positions || []).reduce((sum, x) => sum + (Number(x && x.markValue) || Number(x && x.amountUsd) || 0), 0);
+    const eq = (Number(local.cash) || 0) + marks;
+    const epochOk = local.stateEpoch === STATE_EPOCH;
+    if (!epochOk || eq > start * 3) {
+      console.warn('[store] REJECT poisoned disk state → fresh', { eq, epoch: local.stateEpoch });
+      health.lastLoadOk = false;
+      return null;
+    }
+  }
   health.lastLoadOk = !!local;
   return local;
 }
@@ -418,8 +442,50 @@ function storeHealth() {
   };
 }
 
+async function purgePoisonedRemote(ids) {
+  const sb = supabaseClient();
+  if (!sb) return { ok: false, error: 'no-supabase' };
+  const list = Array.isArray(ids) && ids.length ? ids : ['paper-slim-1', 'default', 'paper-v1'];
+  const results = [];
+  for (const id of list) {
+    try {
+      const tomb = {
+        version: 2,
+        stateEpoch: 'purged',
+        cash: 100,
+        startingBalance: 100,
+        peakBalance: 100,
+        solReserve: 0,
+        positions: [],
+        activity: [],
+        tradeJournal: [],
+        fillsLog: [],
+        equityHistory: [{ t: Date.now(), equity: 100 }],
+        stats: { realizedPnl: 0, feesPaidUsd: 0, wins: 0, losses: 0, trades: 0 },
+        settings: { startingBalance: 100, running: false, profitSweepEnabled: false },
+        updatedAt: Date.now(),
+        purgedAt: Date.now(),
+        purgeReason: 'phantom-wealth-reset',
+      };
+      await circuit.withRetry(async () => {
+        const { error } = await sb.from('jev_paper_state').upsert({ id, state: tomb, updated_at: new Date().toISOString() });
+        if (error) throw error;
+      }, { retries: 1, baseMs: 200 });
+      results.push({ id, ok: true });
+      console.log('[store] purged remote', id);
+    } catch (e) {
+      results.push({ id, ok: false, error: e.message || String(e) });
+      console.warn('[store] purge failed', id, e.message || e);
+    }
+  }
+  return { ok: results.every((r) => r.ok), results };
+}
+
 module.exports = {
   loadState,
+  purgePoisonedRemote,
+  ROW_ID,
+  STATE_EPOCH,
   saveState,
   fileLoad,
   fileSave,

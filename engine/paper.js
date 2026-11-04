@@ -1,6 +1,9 @@
 'use strict';
 
-const { loadState, saveState, flushPending, storeHealth } = require('./store');
+/** Bump to abandon poisoned remote rows (old paper-slim-1 / $207k / $42k). */
+const STATE_EPOCH = process.env.JEV_STATE_EPOCH || 'usd-100-v2';
+
+const { loadState, saveState, flushPending, storeHealth, purgePoisonedRemote } = require('./store');
 const tradedLedger = require('./tradedLedger');
 const { fetchJson, isBackingOff } = require('./http');
 const { createTradeAdapter } = require('./adapters');
@@ -79,8 +82,8 @@ const DS = 'https://api.dexscreener.com';
 const DEFAULTS = {
   startingBalance: 100,
   minLiquidity: 15000,
-  buyPctMin: 0.15,
-  buyPctMax: 0.22,
+  buyPctMin: 0.08,
+  buyPctMax: 0.15,
   maxPositions: 3,
   stopPct: -0.06,
   trailPct: 0.1,
@@ -107,9 +110,10 @@ const DEFAULTS = {
   lossStreakLimit: 3,
   lossStreakCooldownMs: 12 * 60e3,
   maxNarrativePct: 0.5,
-  profitSweepEnabled: false, // disabled — SOL sweeps clutter feed / phantom wealth
-  profitSweepPct: 0.3,
-  profitSweepTrigger: 1.35, // equity / starting (unused when disabled)
+  // profitSweep REMOVED — was a phantom-wealth source; do not reintroduce
+  profitSweepEnabled: false,
+  profitSweepPct: 0,
+  profitSweepTrigger: 999,
   // Live safety caps (enforced even if LIVE_ENABLED flipped — LiveAdapter still stubs)
   liveMaxPerTradeUsd: 25,
   liveMaxDailySpendUsd: 100,
@@ -476,7 +480,8 @@ function emptyState(settings = {}) {
       },
     },
     heatMap: {},
-    solReserve: 0, // profit sweep bucket (paper SOL) — counted inside equity()
+    solReserve: 0, // DEPRECATED — always 0; sweep path removed
+    stateEpoch: STATE_EPOCH,
     lastSweepEquity: starting, // ratchet: next sweep needs +trigger from this mark
     tradeJournal: [], // closed fills for Stats (correct math, no fake aggregates)
     notifications: [],
@@ -569,7 +574,8 @@ function migrateState(raw) {
     raw.mode = 'paper';
     raw.liveEnabled = false;
     raw.heatMap = raw.heatMap || {};
-    raw.solReserve = Number(raw.solReserve) || 0;
+    raw.solReserve = 0; // never restore reserve
+    raw.stateEpoch = raw.stateEpoch || null;
     raw.lastSweepEquity = Number(raw.lastSweepEquity) || Number(raw.startingBalance) || DEFAULTS.startingBalance;
     raw.tradeJournal = Array.isArray(raw.tradeJournal) ? raw.tradeJournal : [];
     raw.activity = Array.isArray(raw.activity) ? raw.activity : [];
@@ -618,11 +624,11 @@ function workingEquity(state) {
 }
 
 /**
- * Total paper wealth: cash + open marks + locked SOL reserve.
- * Reserve is counted once here — never add it again in callers.
+ * Total paper wealth: cash + open marks only.
+ * solReserve / profit-sweep path fully removed — never count phantom SOL.
  */
 function equity(state) {
-  return round(workingEquity(state) + (Number(state.solReserve) || 0), 4);
+  return workingEquity(state);
 }
 
 /**
@@ -632,133 +638,116 @@ function equity(state) {
 function reconcileWealth(state) {
   if (!state) return { ok: true, corrected: false };
   const start = Number(state.startingBalance) || 100;
-  const working = workingEquity(state);
-  const reserve = Number(state.solReserve) || 0;
-  const total = round(working + reserve, 4);
-  const cost = positionCost(state);
-  const unrealized = round(positionMarks(state) - cost, 4);
-  const coherentRealized = round(working - start - unrealized, 4);
-  let corrected = false;
-
-  // Always wipe reserve when sweeps disabled / any residual phantom
-  const sweeps = (state.stats && state.stats.sweeps) || 0;
-  if (reserve > 0) {
-    // Return reserve cash only if books look coherent AND total isn't absurd; else drop
-    const absurd = working + reserve > start * 5;
-    if (absurd || sweeps > 0 || reserve > start) {
-      // Do NOT add reserve back into cash when wealth is poisoned — just zero it
-      if (!absurd && working <= start * 2 && sweeps === 0) {
-        state.cash = round((Number(state.cash) || 0) + reserve, 4);
-      }
-      state.solReserve = 0;
-      if (state.stats) {
-        state.stats.sweeps = 0;
-        state.stats.sweptUsd = 0;
-      }
-      corrected = true;
-    }
+  // Kill any residual reserve — sweep path is gone
+  if ((Number(state.solReserve) || 0) !== 0) {
+    state.solReserve = 0;
   }
-
-  // Hard paper-book reset: cash/equity exploded without journal explaining it
-  {
-    const journal = Array.isArray(state.tradeJournal) ? state.tradeJournal : [];
-    const journalPnl = journal.reduce((a, t) => a + (Number(t && t.pnl) || 0), 0);
-    const eqNow = round((Number(state.cash) || 0) + positionMarks(state), 4);
-    const unexplained =
-      eqNow > start * 3 &&
-      (journal.length === 0 || Math.abs(journalPnl) < start) &&
-      Math.abs(eqNow - start) > start * 2;
-    if (unexplained || eqNow > start * 10) {
-      console.warn('[jev] hard wealth reset', { cash: state.cash, eqNow, start, journalLen: journal.length });
-      state.cash = start;
-      state.solReserve = 0;
-      state.peakBalance = start;
-      state.dayStartEquity = start;
-      state.dayRealizedPnl = 0;
-      state.lastSweepEquity = start;
-      state.positions = [];
-      state.equityHistory = [{ t: Date.now(), equity: start }];
-      state.activity = (state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, 40);
-      state.tradeJournal = [];
-      if (state.stats) {
-        state.stats.realizedPnl = 0;
-        state.stats.sweeps = 0;
-        state.stats.sweptUsd = 0;
-        state.stats.wins = 0;
-        state.stats.losses = 0;
-        state.stats.trades = 0;
-        state.stats.bestTrade = 0;
-        state.stats.worstTrade = 0;
-      }
-      corrected = true;
-    }
-  }
-
-  // Ratchet mark: never below start; at least current total so we don't re-sweep immediately
-  const eq = equity(state);
-  if (!Number.isFinite(state.lastSweepEquity) || state.lastSweepEquity <= 0) {
-    state.lastSweepEquity = start;
-    corrected = true;
-  }
-  if (corrected || state.lastSweepEquity < start) {
-    state.lastSweepEquity = Math.max(start, eq);
-  }
-
-  // Realized / peak vs books
   if (state.stats) {
-    const reported = Number(state.stats.realizedPnl) || 0;
-    if (Math.abs(reported - coherentRealized) > Math.max(25, start * 0.25)) {
-      state.stats.realizedPnl = coherentRealized;
+    state.stats.sweeps = 0;
+    state.stats.sweptUsd = 0;
+  }
+  state.lastSweepEquity = start;
+
+  const marks = positionMarks(state);
+  const cost = positionCost(state);
+  const unrealized = round(marks - cost, 4);
+  const feesPaid = Number(state.stats && state.stats.feesPaidUsd) || 0;
+  const realized = Number(state.stats && state.stats.realizedPnl) || 0;
+  // Invariant: equity = starting + realized + unrealized
+  // Fees are already netted into realized on each sell; feesPaid is display-only.
+  const expected = round(start + realized + unrealized, 4);
+  const cash = Number(state.cash) || 0;
+  const actual = round(cash + marks, 4);
+  let corrected = false;
+  let reason = null;
+
+  // Hard poison: cash/equity exploded vs start (Jupiter decimal bug, resurrected remote)
+  if (actual > start * 3 || cash > start * 3 || Math.abs(realized) > start * 5) {
+    console.warn('[jev] hard wealth reset', { cash, actual, realized, start });
+    state.cash = start;
+    state.solReserve = 0;
+    state.peakBalance = start;
+    state.dayStartEquity = start;
+    state.dayRealizedPnl = 0;
+    state.lastSweepEquity = start;
+    state.positions = [];
+    state.equityHistory = [{ t: Date.now(), equity: start }];
+    state.activity = (state.activity || []).filter((a) => a && a.type !== 'sweep' && Math.abs(Number(a.pnl) || 0) <= start).slice(0, 40);
+    state.fillsLog = (state.fillsLog || []).filter((a) => Math.abs(Number(a.pnl) || 0) <= start).slice(0, 20);
+    state.tradeJournal = [];
+    if (state.stats) {
+      state.stats.realizedPnl = 0;
+      state.stats.feesPaidUsd = 0;
+      state.stats.sweeps = 0;
+      state.stats.sweptUsd = 0;
+      state.stats.wins = 0;
+      state.stats.losses = 0;
+      state.stats.trades = 0;
+      state.stats.bestTrade = 0;
+      state.stats.worstTrade = 0;
+      state.stats.byLane = null;
+      state.stats.byMode = null;
+      state.stats.byArm = null;
+      state.stats.byStrategy = {};
+    }
+    corrected = true;
+    reason = 'hard-reset';
+  } else {
+    const drift = round(actual - expected, 4);
+    if (Math.abs(drift) > Math.max(0.5, start * 0.02)) {
+      // Auto-correct cash so equity matches the books
+      const targetCash = round(expected - marks, 4);
+      console.warn('[jev] wealth invariant drift', { drift, actual, expected, cash, targetCash });
+      state.cash = Math.max(0, targetCash);
       corrected = true;
+      reason = 'drift-correct';
     }
   }
-  if ((Number(state.dayRealizedPnl) || 0) > Math.max(0, coherentRealized) + 1) {
-    state.dayRealizedPnl = Math.max(0, coherentRealized);
-    corrected = true;
-  }
-  if ((Number(state.peakBalance) || 0) > eq * 1.02 + 1) {
-    state.peakBalance = Math.max(start, eq);
-    corrected = true;
-  }
 
-  // Poisoned journal from pre-fix sells (phantom hundreds/%)
-  const journal = Array.isArray(state.tradeJournal) ? state.tradeJournal : [];
-  const journalPnl = journal.reduce((s, t) => s + (Number(t && t.pnl) || 0), 0);
-  if (journal.length && (Math.abs(journalPnl - coherentRealized) > Math.max(30, start) || journal.some((t) => Math.abs(Number(t.pnl) || 0) > start * 2))) {
-    state.tradeJournal = [];
-    corrected = true;
-  }
+  const marks2 = positionMarks(state);
+  const cost2 = positionCost(state);
+  const unrealized2 = round(marks2 - cost2, 4);
+  const realized2 = Number(state.stats && state.stats.realizedPnl) || 0;
+  const fees2 = Number(state.stats && state.stats.feesPaidUsd) || 0;
+  const expected2 = round(start + realized2 + unrealized2, 4);
+  const actual2 = round((Number(state.cash) || 0) + marks2, 4);
+  const drift2 = round(actual2 - expected2, 4);
 
-  // Phantom equityHistory spikes (old reserve double-count) poison max-DD
+  // Scrub equityHistory spikes
   const hist = Array.isArray(state.equityHistory) ? state.equityHistory : [];
-  const ceil = Math.max(eq * 1.35, start * 1.8);
-  const floor = start * 0.25;
-  const cleanHist = hist.filter((p) => {
-    const e = Number(p && p.equity) || 0;
+  const ceil = Math.max(actual2 * 1.5, start * 2);
+  const floor = start * 0.15;
+  const cleanHist = hist.filter((pt) => {
+    const e = Number(pt && pt.equity) || 0;
     return e >= floor && e <= ceil;
   });
   if (cleanHist.length !== hist.length) {
-    state.equityHistory = cleanHist.length ? cleanHist : [{ t: Date.now(), equity: eq }];
+    state.equityHistory = cleanHist.length ? cleanHist : [{ t: Date.now(), equity: actual2 }];
     corrected = true;
   }
 
-  const expected = round(start + (Number(state.stats && state.stats.realizedPnl) || 0) + unrealized + (Number(state.solReserve) || 0), 4);
-  // After reserve wipe, expected ≈ start + realized + unrealized; actual = working (+0 reserve)
-  const actual = equity(state);
-  const drift = round(actual - (start + (Number(state.stats && state.stats.realizedPnl) || 0) + unrealized), 4);
+  if ((Number(state.peakBalance) || 0) > actual2 * 1.05 + 1) {
+    state.peakBalance = Math.max(start, actual2);
+    corrected = true;
+  }
+
   state._wealthInvariant = {
-    ok: Math.abs(drift) <= Math.max(1, start * 0.05),
-    drift,
-    working,
-    reserve: Number(state.solReserve) || 0,
-    realized: Number(state.stats && state.stats.realizedPnl) || 0,
-    unrealized,
+    ok: Math.abs(drift2) <= Math.max(0.5, start * 0.02),
+    drift: drift2,
+    expected: expected2,
+    actual: actual2,
+    start,
+    realized: realized2,
+    unrealized: unrealized2,
+    feesPaid: fees2,
+    reserve: 0,
     corrected,
+    reason,
+    formula: 'equity = starting + realizedPnl + unrealized (fees netted in realized)',
     ts: Date.now(),
   };
   return state._wealthInvariant;
 }
-
 function pushEquity(state) {
   const eq = equity(state);
   const hist = state.equityHistory;
@@ -1084,6 +1073,12 @@ class PaperEngine {
       liveEnabled: false,
       entriesHalted: !!this._entriesHalted,
       haltReason: hb.haltReason,
+      wealthInvariant: (this.state && this.state._wealthInvariant) || null,
+      stateEpoch: (this.state && this.state.stateEpoch) || null,
+      startingBalance: this.state ? Number(this.state.startingBalance) || 100 : 100,
+      equity: this.state ? (Number(this.state.cash) || 0) + (this.state.positions || []).reduce((s, x) => s + (Number(x.markValue) || Number(x.amountUsd) || 0), 0) : null,
+      cash: this.state ? Number(this.state.cash) || 0 : null,
+      solReserve: 0,
       heartbeat: {
         lastMarketAt: hb.lastMarketAt,
         lastPersistOkAt: hb.lastPersistOkAt || sh.lastPersistOkAt || 0,
@@ -1117,6 +1112,21 @@ class PaperEngine {
     const raw = await loadState();
     this.state = migrateState(raw);
     this.state = ensureLaneSettings(this.state);
+    // Anti-resurrect: wrong epoch or absurd books → fresh $100 book
+    {
+      const start = Number(this.state.startingBalance) || 100;
+      const marks = (this.state.positions || []).reduce((s, x) => s + (Number(x.markValue) || Number(x.amountUsd) || 0), 0);
+      const eq = (Number(this.state.cash) || 0) + marks;
+      const epochOk = this.state.stateEpoch === STATE_EPOCH;
+      if (!epochOk || eq > start * 3 || (Number(this.state.solReserve) || 0) > 0) {
+        console.warn('[jev] refusing poisoned/legacy state → fresh $100', {
+          epoch: this.state.stateEpoch, want: STATE_EPOCH, eq, cash: this.state.cash,
+        });
+        const keepSettings = { ...(this.state.settings || {}), startingBalance: start, buyPctMin: 0.08, buyPctMax: 0.15, profitSweepEnabled: false };
+        this.state = emptyState(keepSettings);
+        this.state.stateEpoch = STATE_EPOCH;
+      }
+    }
     this.state.mode = 'paper';
     this.state.liveEnabled = false;
     ensureWeights(this.state);
@@ -1137,11 +1147,17 @@ class PaperEngine {
     if (process.env.LIVE_ENABLED === 'true') {
       console.warn('[jev] LIVE_ENABLED=true ignored — paper only until LiveAdapter is completed');
     }
-    // Force sweep off + mover cap every boot
+    // Force sweep off + mover cap + small-account sizing every boot
     if (this.state.settings) {
       this.state.settings.profitSweepEnabled = false;
+      this.state.settings.profitSweepPct = 0;
+      this.state.settings.profitSweepTrigger = 999;
       this.state.settings.maxMoverPositions = 0;
+      this.state.settings.buyPctMin = Math.min(Number(this.state.settings.buyPctMin) || 0.08, 0.08);
+      this.state.settings.buyPctMax = Math.min(Number(this.state.settings.buyPctMax) || 0.15, 0.15);
     }
+    this.state.solReserve = 0;
+    this.state.stateEpoch = STATE_EPOCH;
     this.state.activity = (this.state.activity || []).filter((a) => a && a.type !== 'sweep').slice(0, 60);
     this.state.fillsLog = Array.isArray(this.state.fillsLog) ? this.state.fillsLog.slice(0, 40) : [];
     // Correct phantom solReserve / poisoned cash from sweep bugs
@@ -1177,6 +1193,12 @@ class PaperEngine {
     // Do NOT seed journal from historic activity — those rows may carry phantom PnL.
     // Fresh closes append via paperSell → tradeJournal (source of truth for Stats).
     saveState(this.state, { immediate: true });
+    try {
+      const purged = await purgePoisonedRemote(['paper-slim-1', 'default', 'paper-v1']);
+      console.log('[jev] purge legacy remote', JSON.stringify(purged));
+    } catch (e) {
+      console.warn('[jev] purge legacy remote failed', e.message);
+    }
     try { await tradedLedger.flush(true); } catch (_) {}
     return this.state;
   }
@@ -1255,10 +1277,11 @@ class PaperEngine {
       mintBlacklistCount: Object.keys(s.mintBlacklist || {}).length,
       presets: Object.keys(PRESETS).map((id) => ({ id, label: PRESETS[id].label })),
       adapterMode: this.adapter.mode(),
-      solReserve: round(s.solReserve || 0, 4),
+      solReserve: 0,
       workingEquity: round(workingEquity(s), 4),
-      lastSweepEquity: round(Number(s.lastSweepEquity) || s.startingBalance || 0, 4),
+      lastSweepEquity: round(s.startingBalance || 0, 4),
       wealthInvariant: s._wealthInvariant || null,
+      stateEpoch: s.stateEpoch || STATE_EPOCH,
       tradeStats: buildTradeStats(s),
       heatMap: s.heatMap || {},
       signalWeights: topWeights(s.signalWeights, 6),
@@ -1614,43 +1637,8 @@ class PaperEngine {
   }
 
   maybeProfitSweep() {
-    const state = this.state;
-    if (!state || state._sweptThisTick) return false;
-    const settings = state.settings;
-    // Disabled by default — SOL sweeps were fake/spammy on paper
-    if (settings.profitSweepEnabled !== true) return false;
-    const trigger = settings.profitSweepTrigger || 1.35;
-    const start = state.startingBalance || 100;
-    const eq = equity(state); // includes reserve once
-    const basemark = Math.max(Number(state.lastSweepEquity) || start, start);
-    // NEW high only: must clear basemark * trigger (step ladder), not a fixed start*1.35
-    if (eq + 1e-9 < basemark * trigger) return false;
-    if (state.cash < 10) return false;
-    const pct = settings.profitSweepPct || 0.3;
-    const sweep = round(state.cash * pct, 4);
-    if (sweep < 2) return false;
-
-    // Move cash → reserve (equity unchanged; reserve counted inside equity())
-    state.cash = round(state.cash - sweep, 4);
-    state.solReserve = round((state.solReserve || 0) + sweep, 4);
-    state.lastSweepEquity = equity(state); // ratchet to post-sweep total
-    state._sweptThisTick = true;
-    state.stats.sweeps = (state.stats.sweeps || 0) + 1;
-    state.stats.sweptUsd = round((state.stats.sweptUsd || 0) + sweep, 4);
-    state.agents.risk.sweptUsd = state.stats.sweptUsd;
-    state.agents.risk.flash = 'profit';
-    state.agents.risk.lastAction = { symbol: 'SOL', reason: 'profit_locked', pnl: sweep, pnlPct: 0 };
-    addActivity(state, {
-      type: 'sweep',
-      symbol: 'SOL',
-      agent: 'Risk',
-      detail: `Profit locked ${round(pct * 100, 0)}% → reserve`,
-      amountUsd: sweep,
-      pnl: sweep,
-      pnlPct: 0,
-    });
-    setBanner(state, `Profit locked $${sweep.toFixed(2)} → SOL reserve · Mode: PAPER`, null);
-    return true;
+    // Fully removed — profit sweep / solReserve created phantom wealth.
+    return false;
   }
 
   setRunning(running) {
@@ -2563,7 +2551,8 @@ class PaperEngine {
         } catch (_) {}
       }
 
-      this.maybeProfitSweep();
+      // profit sweep removed
+      try { reconcileWealth(state); } catch (e) { console.warn('[jev] cycle reconcile', e.message); }
 
       pushEquity(state);
       this.heartbeat.lastMarketAt = Date.now();
@@ -2796,8 +2785,21 @@ class PaperEngine {
     if (fill.mev && fill.mev.sandwiched) {
       state.stats.sandwiched = (state.stats.sandwiched || 0) + 1;
     }
-    const fillPrice = fill.fillPrice || pair.priceUsd * (1 + settings.slippage);
-    const tokens = fill.tokens || spend / fillPrice;
+    let fillPrice = fill.fillPrice || pair.priceUsd * (1 + settings.slippage);
+    const markPx = Number(pair.priceUsd) || 0;
+    if (markPx > 0 && fillPrice > 0) {
+      const r = fillPrice / markPx;
+      if (r < 0.5 || r > 1.5) {
+        console.warn('[jev] reject divergent buy fillPrice', pair.symbol, { fillPrice, markPx, r });
+        fillPrice = markPx * (1 + (settings.slippage || 0.02));
+      }
+    }
+    let tokens = fill.tokens || (fillPrice > 0 ? spend / fillPrice : 0);
+    const expectTok = fillPrice > 0 ? spend / fillPrice : 0;
+    if (expectTok > 0 && (tokens <= 0 || tokens > expectTok * 1.5 || tokens < expectTok * 0.5)) {
+      console.warn('[jev] rewrite buy tokens from mark', pair.symbol, { tokens, expectTok });
+      tokens = expectTok;
+    }
     const feeUsd = round((fill.priorityFeeSol || 0) * (pair.solPriceUsd || 150) + spend * 0.0025, 4);
     const netSpend = round(spend + feeUsd, 4); // full priority fee drag
     const stopPct = risk.stopPct != null ? risk.stopPct : settings.stopPct;
@@ -2946,6 +2948,7 @@ class PaperEngine {
 
   async tickPrices() {
     await this._ready;
+    try { reconcileWealth(this.state); } catch (_) {}
     this.heartbeat.lastPriceAt = Date.now();
     if (!this.heartbeat.lastMarketAt) this.heartbeat.lastMarketAt = this.heartbeat.lastPriceAt;
     const state = this.state;
@@ -3265,11 +3268,34 @@ class PaperEngine {
     if (fill.mev && fill.mev.sandwiched) {
       state.stats.sandwiched = (state.stats.sandwiched || 0) + 1;
     }
-    const fillPrice = fill.fillPrice || (pos.markPrice || pos.entryPrice) * (1 - state.settings.slippage);
-    const proceeds = round(fill.proceedsUsd != null ? fill.proceedsUsd : tokensToSell * fillPrice, 4);
-    const feeDrag = round((fill.priorityFeeSol || 0) * 150, 4);
+    const markPx = Number(pos.markPrice) || Number(pos.entryPrice) || 0;
+    let fillPrice = fill.fillPrice || markPx * (1 - state.settings.slippage);
+    // Reject SOL/USD or decimal-poisoned fills: fill must stay near mark
+    if (markPx > 0 && fillPrice > 0) {
+      const r = fillPrice / markPx;
+      if (r < 0.5 || r > 1.5) {
+        console.warn('[jev] reject divergent sell fillPrice', pos.symbol, { fillPrice, markPx, r });
+        fillPrice = markPx * (1 - (state.settings.slippage || 0.02));
+      }
+    }
+    let proceeds = round(fill.proceedsUsd != null ? fill.proceedsUsd : tokensToSell * fillPrice, 4);
+    const markProceeds = round(tokensToSell * markPx * (1 - (state.settings.slippage || 0.02)), 4);
     const basis = round(pos.remainingUsdBasis * pct, 4);
-    const pnl = round(proceeds - basis - feeDrag * 0.25, 4);
+    // Hard cap: never credit more than 5x basis or 1.25x mark notional
+    const maxProceeds = Math.max(basis * 5, 0.01);
+    const maxMark = Math.max(markProceeds * 1.25, basis * 1.25, 0.01);
+    const cap = Math.min(maxProceeds, maxMark);
+    if (proceeds > cap) {
+      console.warn('[jev] cap insane sell proceeds', pos.symbol, { proceeds, cap, basis, markProceeds });
+      proceeds = round(cap, 4);
+      fillPrice = tokensToSell > 0 ? proceeds / tokensToSell : fillPrice;
+    }
+    if (proceeds < 0) proceeds = 0;
+    const feeDrag = round((fill.priorityFeeSol || 0) * 150, 4);
+    const feeApplied = round(feeDrag * 0.25, 4);
+    const pnl = round(proceeds - basis - feeApplied, 4);
+    state.stats = state.stats || {};
+    state.stats.feesPaidUsd = round((Number(state.stats.feesPaidUsd) || 0) + feeApplied, 4);
     let pnlPct = basis > 0 ? round((pnl / basis) * 100, 2) : 0;
     if (basis < dust || Math.abs(pnlPct) > 500) pnlPct = basis > 0 ? round((pnl / Math.max(basis, dust)) * 100, 2) : 0;
     const silentDust = reason === 'dust' || (proceeds < 0.05 && remBasis < dust * 2);
@@ -3313,9 +3339,12 @@ class PaperEngine {
     state.agents.risk.status = state.positions.length ? 'guarding' : 'idle';
     state.agents.risk.guarding = state.positions[0] ? state.positions[0].symbol : null;
 
-    // stats + feedback loop
-    if ((fullClose || reason === 'tp') && reason !== 'dust') {
+    // stats + feedback loop — always book realized on non-dust exits (partials/moonbag too)
+    // so equity invariant (start + realized + unrealized) stays coherent.
+    if (reason !== 'dust') {
       state.stats.realizedPnl = round((state.stats.realizedPnl || 0) + pnl, 4);
+    }
+    if ((fullClose || reason === 'tp') && reason !== 'dust') {
       if (pnl >= 0) {
         state.stats.wins = (state.stats.wins || 0) + 1;
         state.stats.winStreak = (state.stats.winStreak || 0) + 1;
@@ -3394,7 +3423,7 @@ class PaperEngine {
     if (reason === 'whale') {
       state.stats.whaleExits = (state.stats.whaleExits || 0) + 1;
     }
-    if (fullClose) this.maybeProfitSweep();
+    // profit sweep removed
 
     const type =
       reason === 'stop' || reason === 'time' || reason === 'liq_shock' || reason === 'dust'

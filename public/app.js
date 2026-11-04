@@ -163,7 +163,7 @@
     scanner: { name: 'Scanner', short: 'SCAN', color: '#5b8cff', role: 'Radar on new Pump + DEX launches.' },
     analyst: { name: 'Analyst', short: 'ANAL', color: '#a78bfa', role: 'Scores liquidity, age, smart money.' },
     executor: { name: 'Executor', short: 'EXEC', color: '#00FF66', role: 'Paper fills with Jito/slip sim.' },
-    risk: { name: 'Risk', short: 'RISK', color: '#ff9f0a', role: 'Stops, trail, streak cooldown, sweep.' },
+    risk: { name: 'Risk', short: 'RISK', color: '#ff9f0a', role: 'Stops, trail, streak cooldown.' },
     whale: { name: 'Whale Watch', short: 'WHALE', color: '#22d3ee', role: 'Tracks top holders + smart buys.' },
   };
   const AGENT_ORDER = ['scanner', 'analyst', 'risk', 'executor', 'whale'];
@@ -235,8 +235,7 @@
     if (key === 'executor') {
       const f = a.lastFill;
       if (f) {
-        const sol = (Number(f.amountUsd) / 150);
-        return `BUY $${f.symbol} ${sol >= 0.1 ? sol.toFixed(1) : Number(f.amountUsd).toFixed(0)}`;
+        return `BUY $${f.symbol} $${Number(f.amountUsd).toFixed(0)}`;
       }
       if (a.status === 'buying') return 'FIRING…';
       return '';
@@ -569,7 +568,6 @@
     if (key === 'executor') {
       const f = a.lastFill;
       if (f) {
-        const sol = (Number(f.amountUsd) / 150).toFixed(2); // rough display; USD primary
         return `Bought <strong>$${f.symbol}</strong> $${Number(f.amountUsd).toFixed(0)}`;
       }
       return a.status === 'idle' ? 'Waiting for fill' : String(a.status || 'idle');
@@ -581,7 +579,7 @@
         const pnl = la.pnl != null ? ` ${la.pnl >= 0 ? '+' : ''}$${Math.abs(la.pnl).toFixed(2)}` : '';
         return `${verb} <strong>$${la.symbol}</strong>${pnl}`;
       }
-      return a.guarding ? `Guarding <strong>$${a.guarding}</strong>` : 'TP · trail · sweep';
+      return a.guarding ? `Guarding <strong>$${a.guarding}</strong>` : 'TP · trail · stops';
     }
     if (key === 'whale') {
       const alert = a.lastAlert;
