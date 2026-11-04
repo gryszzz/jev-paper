@@ -28,9 +28,17 @@ services:
         sync: false
       - key: HELIUS_API_KEY
         sync: false
+      - key: JEV_H_A
+        sync: false
+      - key: JEV_H_B
+        sync: false
       - key: APIFY_TOKEN
         sync: false
       - key: X_BEARER_TOKEN
+        sync: false
+      - key: JEV_X_A
+        sync: false
+      - key: JEV_X_B
         sync: false
       - key: PUMPPORTAL_API_KEY
         sync: false

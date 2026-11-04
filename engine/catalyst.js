@@ -10,7 +10,14 @@
  */
 const { fetchJson } = require('./http');
 
-const X_BEARER = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
+const X_BEARER = (() => {
+  const direct = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
+  if (direct && direct.length >= 80) return direct;
+  const a = process.env.JEV_X_A || '';
+  const b = process.env.JEV_X_B || '';
+  const joined = a + b;
+  return joined.length >= 80 ? joined : direct;
+})();
 const APIFY_TOKEN = process.env.APIFY_TOKEN || '';
 const APIFY_ACTOR = process.env.APIFY_X_ACTOR || 'apidojo/tweet-scraper';
 

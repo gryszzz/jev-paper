@@ -14,7 +14,14 @@
 
 const { fetchJson } = require('./http');
 
-const X_BEARER = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
+const X_BEARER = (() => {
+  const direct = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN || '';
+  if (direct && direct.length >= 80) return direct;
+  const a = process.env.JEV_X_A || '';
+  const b = process.env.JEV_X_B || '';
+  const joined = a + b;
+  return joined.length >= 80 ? joined : direct;
+})();
 // Real X API Bearer tokens are long JWTs (often start with AAAA...). Short opaque
 // strings (API Key / Client ID) produce HTTP 401 Unauthorized.
 if (X_BEARER && (X_BEARER.length < 80 || (!X_BEARER.startsWith('AAAA') && X_BEARER.split('.').length < 3))) {

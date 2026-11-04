@@ -8,7 +8,14 @@
  * No paid plan required.
  */
 
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
+const HELIUS_API_KEY = (() => {
+  const direct = process.env.HELIUS_API_KEY || '';
+  if (direct && direct.length >= 20) return direct;
+  const a = process.env.JEV_H_A || '';
+  const b = process.env.JEV_H_B || '';
+  const joined = a + b;
+  return joined.length >= 20 ? joined : direct;
+})();
 
 const PUBLIC_RPCS = [
   process.env.SOLANA_RPC_URL,
