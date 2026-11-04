@@ -998,14 +998,22 @@ class PaperEngine {
     const nowTs = Date.now();
     const marketAge = hb.lastMarketAt ? nowTs - hb.lastMarketAt : Infinity;
     const persistAge = hb.lastPersistOkAt ? nowTs - hb.lastPersistOkAt : Infinity;
-    const dbDown = !sh.dbAvailable && sh.consecutiveFails >= 3;
+    const requireRemote = process.env.JEV_REQUIRE_REMOTE === '1';
+    // Paper: disk is authoritative. Remote (Supabase) outage = degraded, not a hard halt,
+    // unless JEV_REQUIRE_REMOTE=1. Still halt if disk hasn't persisted or market feeds die.
+    const uptimeMs = nowTs - (hb.startedAt || nowTs);
+    const diskDown = sh.diskFails >= 3;
+    const remoteDownHard = requireRemote && !sh.dbAvailable && sh.consecutiveFails >= 3;
     const marketStale = marketAge > (hb.marketStaleMs || 90000);
-    const persistStale = persistAge > 5 * 60e3 && sh.consecutiveFails >= 2;
+    // No successful disk persist after 60s uptime → halt. Once stamped, 5m without disk OK → halt.
+    const persistStale = sh.lastPersistOkAt
+      ? persistAge > 5 * 60e3
+      : uptimeMs > 60000;
     let halt = false;
     let reason = null;
-    if (dbDown) { halt = true; reason = 'db-unavailable'; }
+    if (remoteDownHard) { halt = true; reason = 'db-unavailable'; }
+    else if (diskDown || persistStale) { halt = true; reason = 'persist-stale'; }
     else if (marketStale && hb.lastMarketAt > 0) { halt = true; reason = 'market-stale'; }
-    else if (persistStale) { halt = true; reason = 'persist-stale'; }
     if (halt && !this._entriesHalted) {
       console.warn('[jev] entries HALTED:', reason);
       this._reconcileNeeded = true;
@@ -1037,8 +1045,12 @@ class PaperEngine {
       !this._entriesHalted &&
       (hb.lastCycleAt > 0 ? nowTs - hb.lastCycleAt < 180000 : true) &&
       (hb.memRssMb ? hb.memRssMb < 480 : true);
+    let pkgVersion = null;
+    try { pkgVersion = require('../package.json').version; } catch (_) {}
     return {
       ok,
+      version: pkgVersion,
+      commit: process.env.RENDER_GIT_COMMIT || process.env.GITHUB_SHA || null,
       paper: true,
       mode: 'PAPER',
       liveEnabled: false,
@@ -1062,6 +1074,9 @@ class PaperEngine {
         consecutiveFails: sh.consecutiveFails,
         circuitOpen: sh.circuitOpen,
         dbAvailable: sh.dbAvailable,
+        diskOk: !!sh.diskOk,
+        persistMode: sh.persistMode || 'disk+remote',
+        lastRemotePersistOkAt: sh.lastRemotePersistOkAt || 0,
         lastPersistError: sh.lastPersistError,
       },
       xBuzz: (() => { try { return xbuzz.stats(); } catch (_) { return null; } })(),

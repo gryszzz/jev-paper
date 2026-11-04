@@ -25,14 +25,17 @@ const MAX_EQUITY_FILE_BYTES = 2 * 1024 * 1024;
 const circuit = createCircuit({ name: 'supabase-state', failureThreshold: 3, openMs: 20000, maxOpenMs: 180000, timeoutMs: 8000 });
 
 const health = {
-  lastPersistOkAt: 0,
+  lastPersistOkAt: 0,          // disk OK counts (paper-authoritative)
+  lastRemotePersistOkAt: 0,    // supabase OK
   lastPersistAttemptAt: 0,
   lastPersistBytes: 0,
   lastPersistError: null,
   lastLoadAt: 0,
   lastLoadOk: false,
-  consecutiveFails: 0,
+  consecutiveFails: 0,         // remote fails
+  diskFails: 0,
   circuitOpen: false,
+  persistMode: 'disk+remote',
 };
 
 function fileLoad() {
@@ -50,9 +53,16 @@ function fileLoad() {
 function fileSave(state) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
+    const slim = state; // caller usually passes already-slim
+    fs.writeFileSync(STATE_PATH, JSON.stringify(slim));
+    health.lastPersistOkAt = Date.now();
+    health.diskFails = 0;
+    return true;
   } catch (e) {
     console.warn('[store] file save', e.message);
+    health.diskFails += 1;
+    health.lastPersistError = 'disk: ' + (e.message || e);
+    return false;
   }
 }
 
@@ -70,11 +80,11 @@ function supabaseClient() {
 function slimStateForPersist(state) {
   if (!state || typeof state !== 'object') return state;
   const activity = Array.isArray(state.activity)
-    ? state.activity.filter((a) => a && a.type !== 'sweep').slice(0, 60)
+    ? state.activity.filter((a) => a && a.type !== 'sweep').slice(0, 40)
     : [];
-  const equityHistory = Array.isArray(state.equityHistory) ? state.equityHistory.slice(-240) : [];
-  const tradeJournal = Array.isArray(state.tradeJournal) ? state.tradeJournal.slice(-250) : [];
-  const seenMints = Array.isArray(state.seenMints) ? state.seenMints.slice(-400) : [];
+  const equityHistory = Array.isArray(state.equityHistory) ? state.equityHistory.slice(-60) : [];
+  const tradeJournal = Array.isArray(state.tradeJournal) ? state.tradeJournal.slice(-80) : [];
+  const seenMints = Array.isArray(state.seenMints) ? state.seenMints.slice(-150) : [];
   const notifications = Array.isArray(state.notifications) ? state.notifications.slice(0, 20) : [];
 
   // Positions: drop bulky nested quote blobs if present
@@ -255,7 +265,9 @@ async function _doUpsert(slim) {
     if (error) throw error;
   }, { retries: 2, baseMs: 500 });
 
-  health.lastPersistOkAt = Date.now();
+  health.lastRemotePersistOkAt = Date.now();
+  // disk already stamped lastPersistOkAt in fileSave
+  if (!health.lastPersistOkAt) health.lastPersistOkAt = health.lastRemotePersistOkAt;
   health.lastPersistError = null;
   health.consecutiveFails = 0;
   health.circuitOpen = false;
@@ -325,12 +337,17 @@ function saveState(state, { immediate = false } = {}) {
 
 function storeHealth() {
   const c = circuit.state();
+  const remoteConfigured = !!supabaseClient();
+  const remoteOk = remoteConfigured && !c.open && health.consecutiveFails < 5;
   return {
     ...health,
     circuitOpen: c.open,
     circuitFailures: c.failures,
     debounceMs: DEBOUNCE_MS,
-    dbAvailable: !!supabaseClient() && !c.open && health.consecutiveFails < 5,
+    remoteConfigured,
+    dbAvailable: remoteOk, // supabase specifically
+    diskOk: health.diskFails < 3 && health.lastPersistOkAt > 0,
+    persistMode: remoteOk ? 'disk+remote' : (remoteConfigured ? 'disk-degraded' : 'disk-only'),
   };
 }
 
