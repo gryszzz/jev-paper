@@ -40,6 +40,14 @@ function createCircuit({
   function allow() {
     const now = Date.now();
     if (openUntil > now) return false;
+    // Open window elapsed → half-open probe (single in-flight)
+    if (openUntil && now >= openUntil) {
+      halfOpen = true;
+      openUntil = 0;
+    } else if (!openUntil && failures > 0 && !halfOpen && lastOkAt === 0) {
+      // cold start after failures cleared openUntil via state(); stay half-open until success
+      halfOpen = true;
+    }
     if (inFlight >= MAX_IN_FLIGHT) return false;
     return true;
   }

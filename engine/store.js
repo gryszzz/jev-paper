@@ -247,6 +247,24 @@ let _saveTimer = null;
 let _pending = null;
 let _pendingImmediate = false;
 let _flushing = false;
+let _remoteSyncTimer = null;
+let _lastRemoteAttemptAt = 0;
+
+function ensureRemoteSyncLoop() {
+  if (_remoteSyncTimer) return;
+  _remoteSyncTimer = setInterval(() => {
+    try {
+      const st = circuit.state();
+      // Probe / flush when circuit half-open or closed, and we have pending or never synced remote
+      if (st.open) return;
+      if (!_pending && health.lastRemotePersistOkAt > 0 && health.consecutiveFails === 0) return;
+      if (Date.now() - _lastRemoteAttemptAt < 5000) return;
+      _lastRemoteAttemptAt = Date.now();
+      if (_pending) flushPending().catch(() => {});
+    } catch (_) {}
+  }, 30000);
+  if (typeof _remoteSyncTimer.unref === 'function') _remoteSyncTimer.unref();
+}
 
 async function _doUpsert(slim) {
   const sb = supabaseClient();
@@ -318,6 +336,7 @@ async function flushPending() {
 function saveState(state, { immediate = false } = {}) {
   _pending = state;
   if (immediate) _pendingImmediate = true;
+  ensureRemoteSyncLoop();
 
   // Always mirror a slim copy locally quickly (crash safety on same instance)
   try {
@@ -342,6 +361,7 @@ function storeHealth() {
   return {
     ...health,
     circuitOpen: c.open,
+    circuitHalfOpen: !!c.halfOpen,
     circuitFailures: c.failures,
     debounceMs: DEBOUNCE_MS,
     remoteConfigured,
