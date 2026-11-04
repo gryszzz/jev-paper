@@ -291,13 +291,14 @@ function ensureRemoteSyncLoop() {
     try {
       const st = circuit.state();
       // Probe / flush when circuit half-open or closed, and we have pending or never synced remote
-      if (st.open) return; // wait for half-open window
-      if (!_pending && !st.halfOpen && health.lastRemotePersistOkAt > 0 && health.consecutiveFails === 0) return;
+      if (st.open) return; // wait for half-open window (state() may flip to half-open)
+      const needRemote = health.lastRemotePersistOkAt === 0 || health.consecutiveFails > 0 || !!st.halfOpen;
+      if (!_pending && !needRemote) return;
       if (Date.now() - _lastRemoteAttemptAt < 5000) return;
       _lastRemoteAttemptAt = Date.now();
       if (_pending) flushPending().catch(() => {});
     } catch (_) {}
-  }, 30000);
+  }, 10000); // 10s while recovering — half-open probes must not wait 30s
   if (typeof _remoteSyncTimer.unref === 'function') _remoteSyncTimer.unref();
 }
 

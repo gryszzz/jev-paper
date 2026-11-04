@@ -1,6 +1,6 @@
 {
   "name": "jev-paper",
-  "version": "21.9.16",
+  "version": "21.9.17",
   "description": "JEV Solana memecoin paper-trading dashboard (PWA)",
   "main": "server.js",
   "scripts": {

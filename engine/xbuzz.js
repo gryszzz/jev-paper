@@ -18,7 +18,7 @@ const X_BEARER = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN 
 // Real X API Bearer tokens are long JWTs (often start with AAAA...). Short opaque
 // strings (API Key / Client ID) produce HTTP 401 Unauthorized.
 if (X_BEARER && (X_BEARER.length < 80 || (!X_BEARER.startsWith('AAAA') && X_BEARER.split('.').length < 3))) {
-  console.warn('[xbuzz] X_BEARER_TOKEN looks wrong shape (len=' + X_BEARER.length + '). Need App Bearer Token from X developer portal → Keys and tokens, not API Key/Client ID.');
+  console.warn('[xbuzz] X_BEARER_TOKEN looks wrong shape (len=' + X_BEARER.length + '). Need OAuth 2.0 App-Only Bearer Token (Developer Portal → Project → App → Keys and tokens → Bearer Token). Not API Key, API Secret, Client ID, or Client Secret.');
 }
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN || '';

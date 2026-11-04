@@ -52,6 +52,7 @@ const {
   DEFAULT_MOVER_SLOT_FRAC,
   LANE_DEFAULTS,
   classifyLane,
+  bumpLaneStats,
 } = require('./lanes');
 const {
   MODE_TAG,
