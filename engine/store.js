@@ -22,7 +22,7 @@ const ROW_ID = process.env.JEV_STATE_ID || 'default';
 const DEBOUNCE_MS = Math.max(15000, Number(process.env.JEV_PERSIST_MS) || 45000);
 const MAX_EQUITY_FILE_BYTES = 2 * 1024 * 1024;
 
-const circuit = createCircuit({ name: 'supabase-state', failureThreshold: 3, openMs: 20000, maxOpenMs: 180000, timeoutMs: 10000 });
+const circuit = createCircuit({ name: 'supabase-state', failureThreshold: 3, openMs: 20000, maxOpenMs: 180000, timeoutMs: 8000 });
 
 const health = {
   lastPersistOkAt: 0,
@@ -210,7 +210,7 @@ async function loadState() {
         const { data, error } = await sb.from('jev_paper_state').select('state').eq('id', ROW_ID).maybeSingle();
         if (error) throw error;
         return data;
-      }, { retries: 2 });
+      }, { retries: 1, baseMs: 300 });
       if (data && data.state && data.state.version) {
         console.log('[store] loaded from supabase · bytes≈', JSON.stringify(data.state).length);
         fileSave(data.state);

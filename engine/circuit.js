@@ -71,11 +71,20 @@ function createCircuit({
     }
     inFlight += 1;
     const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timer = setTimeout(() => {
-      try { if (ctrl) ctrl.abort(); } catch (_) {}
-    }, timeoutMs);
+    let timer;
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try { if (ctrl) ctrl.abort(); } catch (_) {}
+        const err = new Error(`[${name}] timeout ${timeoutMs}ms`);
+        err.code = 'TIMEOUT';
+        reject(err);
+      }, timeoutMs);
+    });
     try {
-      const result = await fn(ctrl ? ctrl.signal : undefined);
+      const result = await Promise.race([
+        Promise.resolve().then(() => fn(ctrl ? ctrl.signal : undefined)),
+        timeoutPromise,
+      ]);
       recordSuccess();
       return result;
     } catch (e) {

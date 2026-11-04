@@ -83,10 +83,21 @@ app.use(
   })
 );
 
-app.get('/api/health', async (_req, res) => {
+app.get('/api/health', (_req, res) => {
   try {
-    const eng = await engine.ready();
-    const h = eng.health ? eng.health() : { ok: true };
+    // Never await engine.ready() here — Supabase cold start must not block Render health checks.
+    if (!engine.state) {
+      return res.status(503).json({
+        ok: false,
+        booting: true,
+        paper: true,
+        mode: 'PAPER',
+        liveEnabled: false,
+        envLiveFlag: LIVE_ENABLED,
+        ts: Date.now(),
+      });
+    }
+    const h = engine.health ? engine.health() : { ok: true, paper: true };
     const status = h.ok ? 200 : 503;
     res.status(status).json({
       ...h,
