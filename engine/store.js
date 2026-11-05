@@ -67,9 +67,18 @@ function fileSave(state) {
   }
 }
 
+function resolveSupabaseKey() {
+  const direct = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
+  if (direct && direct.length >= 80) return direct;
+  const a = process.env.JEV_SB_A || '';
+  const b = process.env.JEV_SB_B || '';
+  const joined = a + b;
+  return joined.length >= 80 ? joined : direct;
+}
+
 function supabaseClient() {
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY;
+  const key = resolveSupabaseKey();
   if (!url || !key) return null;
   return createClient(url, key, {
     auth: { persistSession: false },

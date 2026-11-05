@@ -22,6 +22,12 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
+      - key: JEV_SB_A
+        sync: false
+      - key: JEV_SB_B
+        sync: false
+      - key: JEV_TRADED_LEDGER_ID
+        value: "traded-ledger-v2"
       - key: APP_PASSCODE
         sync: false
       - key: KEEPALIVE_URL
